@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   comfyui:
-    image: ${COMFYUI_IMAGE:-ghcr.io/yanwenkun/comfyui-docker:cpu}
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: comfyui-frontend
     ports:
       - "${COMFYUI_PORT:-8188}:8188"
@@ -13,15 +15,6 @@ services:
       - ./data/workflows:/app/user
       - ./data/custom_nodes:/app/custom_nodes
     environment:
-      # ═══════════════════════════════════════════════════════════
-      # CONFIGURAÇÕES DO COMFYUI (edite no Coolify → Environment)
-      # ═══════════════════════════════════════════════════════════
-
-      # Argumentos CLI do ComfyUI
-      # Default: --cpu --listen --preview-method auto
-      # Se tiver GPU: --listen --preview-method auto
-      - CLI_ARGS=${COMFYUI_CLI_ARGS:---cpu --listen --preview-method auto}
-
       # ═══════════════════════════════════════════════════════════
       # CONFIGURAÇÕES VAST.AI (para processamento GPU sob demanda)
       # ═══════════════════════════════════════════════════════════
@@ -46,17 +39,11 @@ services:
       - S3_REGION=${S3_REGION:-auto}
 
     restart: unless-stopped
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8188/" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
 
     # Limites de recursos (ajuste conforme sua VPS)
     deploy:
       resources:
         limits:
-          memory: ${MEMORY_LIMIT:-2G}
+          memory: ${MEMORY_LIMIT:-4G}
         reservations:
-          memory: ${MEMORY_RESERVATION:-512M}
+          memory: ${MEMORY_RESERVATION:-1G}
