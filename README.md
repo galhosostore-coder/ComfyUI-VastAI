@@ -25,135 +25,83 @@ Arquitetura híbrida para ComfyUI com otimização de custos:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 📋 Pré-requisitos
-
-- VPS com Coolify instalado
-- Conta no [Vast.ai](https://vast.ai) (para processamento GPU)
-- Repositório Git (GitHub, GitLab, etc.)
-
 ## 🚀 Deploy no Coolify
 
-### 1. Preparar Repositório
-
-```bash
-# Clone este repositório
-git clone https://github.com/SEU_USUARIO/ConfyUI-VastIA.git
-cd ConfyUI-VastIA
-
-# Configure suas credenciais
-cp .env.example .env
-# Edite .env com sua API key do Vast.ai
-```
-
-### 2. Deploy no Coolify
-
-1. Acesse seu painel Coolify
+### 1. Adicionar Recurso
+1. Acesse seu Coolify
 2. **+ Add Resource** → **Docker Compose**
-3. Conecte seu repositório GitHub
-4. Selecione este repositório
-5. Coolify detectará automaticamente o `docker-compose.yml`
-6. Clique em **Deploy**
+3. Conecte: `galhosostore-coder/ComfyUI-VastAI`
+4. Deploy!
 
-### 3. Acessar ComfyUI
+### 2. Configurar Environment Variables
 
-Após o deploy, acesse:
+No Coolify, vá em **Environment Variables** e configure:
+
+| Variável | Descrição | Default |
+|----------|-----------|---------|
+| `COMFYUI_PORT` | Porta do ComfyUI | `8188` |
+| `VASTAI_API_KEY` | Sua API Key do Vast.ai | - |
+| `VASTAI_MAX_PRICE` | Preço máximo/hora (USD) | `0.50` |
+| `VASTAI_PREFERRED_GPUS` | GPUs preferidas | `RTX 3090,RTX 4090` |
+| `MEMORY_LIMIT` | Limite de RAM | `2G` |
+
+> 💡 **Dica**: Copie as variáveis do arquivo `.env.example` para o Coolify
+
+### 3. Acessar
 ```
-https://seu-dominio.com:8188
+https://seu-dominio:8188
 ```
 
-Ou configure um proxy reverso no Coolify para ter acesso via HTTPS.
+---
 
 ## 🎮 Usando Vast.ai para Processamento
 
-### Configuração Inicial
+### Configuração
+
+1. Crie conta em [vast.ai](https://vast.ai)
+2. Copie sua API Key
+3. Cole no Coolify: `VASTAI_API_KEY=sua_key`
+
+### Comandos (via terminal do container)
 
 ```bash
-# Instale dependências
-cd scripts
-pip install -r requirements.txt
+# Buscar GPUs disponíveis
+python /app/scripts/vastai_manager.py search
 
-# Configure API key
-# Obtenha em: https://vast.ai/console/account
-echo "VASTAI_API_KEY=sua_api_key" > ../.env
-```
-
-### Comandos Disponíveis
-
-```bash
-# Buscar GPUs disponíveis (até $0.50/hora)
-python vastai_manager.py search --price 0.50
-
-# Iniciar uma GPU
-python vastai_manager.py start --price 0.40
+# Iniciar GPU
+python /app/scripts/vastai_manager.py start
 
 # Verificar status
-python vastai_manager.py status
+python /app/scripts/vastai_manager.py status
 
-# Processar um workflow
-python vastai_manager.py process ../data/workflows/meu_workflow.json
-
-# ⚠️ IMPORTANTE: Parar quando terminar (para de cobrar!)
-python vastai_manager.py stop
+# ⚠️ IMPORTANTE: Parar quando terminar!
+python /app/scripts/vastai_manager.py stop
 ```
+
+---
 
 ## 💰 Estimativa de Custos
 
-| GPU | Preço/Hora | Uso Típico (1h/dia) |
-|-----|------------|---------------------|
+| GPU | Preço/Hora | Uso (1h/dia) |
+|-----|------------|--------------|
 | RTX 3090 | $0.20-0.40 | ~$6-12/mês |
 | RTX 4090 | $0.40-0.80 | ~$12-24/mês |
-| A100 40GB | $1.00-2.00 | ~$30-60/mês |
 
-> 💡 **Dica**: Use o comando `stop` assim que terminar para maximizar economia!
+---
 
-## 📁 Estrutura do Projeto
+## 📁 Estrutura
 
 ```
-ConfyUI-VastIA/
-├── docker-compose.yml    # Config Docker para Coolify
+ComfyUI-VastAI/
+├── docker-compose.yml    # Config Docker (editável via Coolify)
 ├── .env.example          # Template de variáveis
-├── .gitignore
-├── README.md
 ├── data/
 │   ├── input/           # Imagens de entrada
-│   ├── output/          # Imagens geradas
-│   ├── workflows/       # Seus workflows JSON
-│   └── custom_nodes/    # Nodes customizados
+│   ├── output/          # Resultados
+│   └── workflows/       # Seus workflows
 └── scripts/
-    ├── vastai_manager.py    # Gerenciador de GPUs
-    └── requirements.txt
+    └── vastai_manager.py
 ```
-
-## 🔧 Fluxo de Trabalho Recomendado
-
-1. **Design** (Coolify - GRÁTIS)
-   - Acesse ComfyUI na VPS
-   - Crie/edite seus workflows
-   - Salve como JSON em `data/workflows/`
-
-2. **Processamento** (Vast.ai - PAGO)
-   ```bash
-   python vastai_manager.py start        # Inicia GPU
-   python vastai_manager.py status       # Confirma que está rodando
-   # Use o IP/porta exibido para acessar ComfyUI com GPU
-   # ... faça suas gerações ...
-   python vastai_manager.py stop         # PARA DE COBRAR!
-   ```
-
-3. **Resultados**
-   - Baixe resultados da instância Vast.ai
-   - Ou configure S3 para transferência automática
-
-## ❓ FAQ
-
-**P: Posso gerar imagens diretamente na VPS?**
-R: Tecnicamente sim, mas será MUITO lento (minutos por imagem). A VPS é apenas para design de workflows.
-
-**P: Quanto tempo leva para iniciar uma GPU?**
-R: Geralmente 2-5 minutos para a instância ficar pronta.
-
-**P: E se eu esquecer de parar a GPU?**
-R: Configure um alerta no Vast.ai ou use o comando `status` regularmente. Você pode definir gastos máximos na conta.
 
 ## 📄 Licença
 
