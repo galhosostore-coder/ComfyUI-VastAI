@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  comfyui:
+    image: ghcr.io/yanwenkun/comfyui-docker:cpu
+    container_name: comfyui-frontend
+    ports:
+      - "8188:8188"
+    volumes:
+      # Outputs gerados (imagens, videos)
+      - ./data/output:/app/output
+      # Inputs para processamento
+      - ./data/input:/app/input
+      # Workflows salvos pelo usuário
+      - ./data/workflows:/app/user
+      # Custom nodes (se necessário)
+      - ./data/custom_nodes:/app/custom_nodes
+    environment:
+      # --cpu: Força modo CPU (sem CUDA)
+      # --listen: Aceita conexões externas
+      # --preview-method auto: Previews mesmo sem GPU
+      - CLI_ARGS=--cpu --listen --preview-method auto
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8188/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
