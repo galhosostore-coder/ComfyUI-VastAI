@@ -32,6 +32,19 @@ Este projeto permite que você execute uma instância leve do ComfyUI no seu ser
     vastai set api-key SUA_CHAVE_AQUI
     ```
 
+## Configuração via Variáveis de Ambiente (Coolify)
+
+Se você estiver rodando este script dentro do container do Coolify (ou apenas quiser configurar via sistema), você pode usar as seguintes **Variáveis de Ambiente** na aba "Environment Variables" do seu projeto no Coolify. Isso torna mais seguro e fácil de alterar sem mexer no código.
+
+| Variável | Descrição | Exemplo |
+| :--- | :--- | :--- |
+| `VAST_API_KEY` | **Obrigatório**. Sua chave de API da Vast.ai. | `81237...` |
+| `VAST_GPU` | (Opcional) Nome da GPU para buscar. Padrão: `RTX_3090`. | `RTX_4090` |
+| `VAST_PRICE` | (Opcional) Preço máximo por hora em dólares. Padrão: `0.5`. | `1.5` |
+| `VAST_KEEP_ALIVE` | (Opcional) Se `true`, não destrói a máquina ao final. | `true` |
+
+*Nota*: Se você definir essas variáveis, não precisa passar argumentos para o script, nem criar o `config.json`. O script dará prioridade para o que estiver nas variáveis de ambiente!
+
 ## Passo 3: Como Usar (Fluxo de Trabalho)
 
 1.  **Criar o Workflow**:

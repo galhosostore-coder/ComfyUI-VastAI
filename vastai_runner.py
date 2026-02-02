@@ -161,27 +161,43 @@ def main():
     # Load config file
     config = load_config()
     
-    # Priority: Args > Config > Defaults/Env
 
-    # API Key
-    api_key = os.getenv("VAST_API_KEY") or config.get("api_key")
-    if not api_key:
-        print("Please set VAST_API_KEY environment variable or 'api_key' in config.json.")
-        sys.exit(1)
+    # Priority: Args (Explicit) > Env Vars > Config File > Defaults
+
+    # Load defaults from Env Vars or Config
+    default_gpu = os.getenv("VAST_GPU") or config.get("gpu_query", "RTX_3090")
     
-    # Defaults handled by argparse, but we can override defaults if config exists and arg is default
-    # A simpler way is to set defaults in argparse from config
+    # Handle Price (str to float)
+    env_price = os.getenv("VAST_PRICE")
+    default_price = float(env_price) if env_price else config.get("max_price", 0.5)
+    
+    # Handle Keep Alive
+    env_keep_alive = os.getenv("VAST_KEEP_ALIVE")
+    if env_keep_alive:
+        default_keep_alive = env_keep_alive.lower() in ('true', '1', 'yes')
+    else:
+        default_keep_alive = config.get("keep_alive", False)
+
     parser.set_defaults(
-        gpu=config.get("gpu_query", "RTX_3090"),
-        price=config.get("max_price", 0.5),
-        keep_alive=config.get("keep_alive", False)
+        gpu=default_gpu,
+        price=default_price,
+        keep_alive=default_keep_alive
     )
 
     args = parser.parse_args()
     
-    # Set the env var for the subprocess calls if it wasn't set
-    if "VAST_API_KEY" not in os.environ:
-        os.environ["VAST_API_KEY"] = api_key
+    # API Key Handling
+    api_key = os.getenv("VAST_API_KEY") or config.get("api_key")
+    if not api_key:
+        print("Error: Config missing. Please set 'VAST_API_KEY' environment variable (Coolify) or in config.json")
+        sys.exit(1)
+
+    # Ensure the environment variable is set for subprocesses
+    os.environ["VAST_API_KEY"] = api_key
+    
+    # Explicitly authenticate vastai CLI to be safe
+    # This writes to ~/.vast_api_key which works for the current session/container
+    subprocess.run(["vastai", "set", "api-key", api_key], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
     check_vast_cli()
     
