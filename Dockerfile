@@ -1,52 +1,38 @@
-# ComfyUI CPU-only Dockerfile
-# Baseado em Python oficial para máxima compatibilidade
+FROM python:3.10-slim
 
-FROM python:3.11-slim-bookworm
-
-LABEL maintainer="ComfyUI-VastAI"
-LABEL description="ComfyUI CPU-only for workflow design"
-
-# Evitar prompts interativos
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PIP_NO_CACHE_DIR=1
+ENV PYTHONUNBUFFERED=1
 
-# Instalar dependências do sistema
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
     git \
-    curl \
+    wget \
+    build-essential \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Criar usuário não-root
-RUN useradd -m -u 1000 comfy
 WORKDIR /app
 
-# Clonar ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app \
-    && chown -R comfy:comfy /app
+# Clone ComfyUI
+RUN git clone https://github.com/Comfy-Org/ComfyUI.git .
 
-# Instalar dependências Python (CPU-only - sem CUDA)
-RUN pip install --upgrade pip && \
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu && \
-    pip install -r requirements.txt
+# Install Python dependencies (CPU version)
+# We copy requirements from the host so we can manage them
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Criar diretórios para dados
-RUN mkdir -p /app/output /app/input /app/user /app/custom_nodes \
-    && chown -R comfy:comfy /app
+# Install standard ComfyUI requirements just in case (but we overrode torch above)
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Mudar para usuário não-root
-USER comfy
+# Create a volume for output and input to persist data
+VOLUME /app/output
+VOLUME /app/input
+VOLUME /app/user
+VOLUME /app/custom_nodes
 
-# Porta padrão do ComfyUI
+# Expose the default port
 EXPOSE 8188
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8188/ || exit 1
-
-# Comando padrão
-CMD ["python", "main.py", "--cpu", "--listen", "0.0.0.0", "--preview-method", "auto"]
+# Command to run ComfyUI listening on all interfaces (needed for Docker)
+CMD ["python", "main.py", "--listen", "0.0.0.0", "--cpu"]

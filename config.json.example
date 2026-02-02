@@ -1,0 +1,6 @@
+{
+    "api_key": "YOUR_VAST_AI_API_KEY_HERE",
+    "gpu_query": "RTX_4090",
+    "max_price": 0.8,
+    "keep_alive": false
+}

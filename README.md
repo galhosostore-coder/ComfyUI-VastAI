@@ -1,108 +1,67 @@
-# ComfyUI + Vast.ai 🚀
+# ComfyUI Híbrido: Coolify + Vast.ai
 
-Arquitetura híbrida para ComfyUI com otimização de custos:
-- **Coolify (VPS)**: Interface web CPU-only para design de workflows
-- **Vast.ai**: GPUs sob demanda para processamento
+Este projeto permite que você execute uma instância leve do ComfyUI no seu servidor Coolify (Contabo) para **criar e visualizar** fluxos de trabalho, e use o poder da **Vast.ai** para o processamento pesado de imagens/vídeos sob demanda.
 
-## 🏗️ Arquitetura
+## Estrutura do Projeto
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Seu Fluxo de Trabalho                    │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   ┌─────────────┐         ┌─────────────────────────────┐   │
-│   │   COOLIFY   │         │         VAST.AI             │   │
-│   │  (CPU-only) │         │      (GPU sob demanda)      │   │
-│   │             │         │                             │   │
-│   │  ComfyUI UI │ ──────► │  RTX 3090/4090 processing   │   │
-│   │  Criar/Editar         │  Paga apenas quando usa     │   │
-│   │  workflows  │ ◄────── │  ~$0.20-0.80/hora           │   │
-│   │             │         │                             │   │
-│   │   GRÁTIS    │         │                             │   │
-│   └─────────────┘         └─────────────────────────────┘   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+- **Dockerfile**: Configuração para instalar o ComfyUI no Coolify (modo CPU, baixo consumo).
+- **vastai_runner.py**: Script Python para alugar automaticamente uma GPU na Vast.ai, executar o trabalho e encerrar a máquina (economizando dinheiro).
+- **requirements.txt**: Dependências necessárias.
 
-## 🚀 Deploy no Coolify
+## Passo 1: Instalação no Coolify
 
-### 1. Adicionar Recurso
-1. Acesse seu Coolify
-2. **+ Add Resource** → **Docker Compose**
-3. Conecte: `galhosostore-coder/ComfyUI-VastAI`
-4. Deploy!
+1.  Crie um novo recurso no Coolify e selecione sua fonte (GitHub, GitLab, etc.) onde você hospedou estes arquivos.
+2.  O Coolify detectará o `Dockerfile` automaticamente.
+3.  **Configurações de Build**:
+    -   Certifique-se de que a porta exposta seja `8188`.
+4.  **Implante (Deploy)**.
+5.  Após o deploy, você poderá acessar o ComfyUI pelo domínio configurado no Coolify.
+    -   *Nota*: Esta instância roda em CPU. Ela serve para criar os nós (nodes) e salvar o workflow, mas será lenta se tentar gerar imagens complexas nela mesma.
 
-### 2. Configurar Environment Variables
+## Passo 2: Configuração da Vast.ai
 
-No Coolify, vá em **Environment Variables** e configure:
+1.  Crie uma conta na [Vast.ai](https://vast.ai/).
+2.  Adicione créditos à sua conta.
+3.  Vá em **Account** (Conta) -> **API Key** e copie sua chave.
+4.  Instale a ferramenta de linha de comando `vastai` no seu computador (onde você rodará o script de automação):
+    ```bash
+    pip install vastai requests websocket-client
+    ```
+5.  Defina sua chave de API:
+    ```bash
+    vastai set api-key SUA_CHAVE_AQUI
+    ```
 
-| Variável | Descrição | Default |
-|----------|-----------|---------|
-| `COMFYUI_PORT` | Porta do ComfyUI | `8188` |
-| `VASTAI_API_KEY` | Sua API Key do Vast.ai | - |
-| `VASTAI_MAX_PRICE` | Preço máximo/hora (USD) | `0.50` |
-| `VASTAI_PREFERRED_GPUS` | GPUs preferidas | `RTX 3090,RTX 4090` |
-| `MEMORY_LIMIT` | Limite de RAM | `2G` |
+## Passo 3: Como Usar (Fluxo de Trabalho)
 
-> 💡 **Dica**: Copie as variáveis do arquivo `.env.example` para o Coolify
+1.  **Criar o Workflow**:
+    -   Acesse seu ComfyUI no Coolify.
+    -   Monte seu fluxo de trabalho.
+    -   Clique no botão de engrenagem (Configurações) e ative **"Enable Dev mode Options"**.
+    -   Agora aparecerá um botão **"Save (API Format)"**. Clique nele para baixar o arquivo `.json` (ex: `workflow_api.json`).
 
-### 3. Acessar
-```
-https://seu-dominio:8188
-```
+2.  **Executar na Vast.ai**:
+    -   No seu computador (Windows), abra o terminal (PowerShell ou CMD) na pasta deste projeto.
+    -   Execute o script `vastai_runner.py` apontando para o arquivo que você baixou:
 
----
+    ```bash
+    # Exemplo: Rodar usando uma RTX 3090 (padrão) e gastando no max $0.50/hora
+    python vastai_runner.py --workflow caminho/para/workflow_api.json
+    
+    # Exemplo: Procurar por uma 4090
+    python vastai_runner.py --workflow workflow.json --gpu "RTX_4090" --price 0.8
+    ```
 
-## 🎮 Usando Vast.ai para Processamento
+3.  **O que o script faz**:
+    -   Procura a máquina mais barata na Vast.ai que atenda aos critérios.
+    -   Aluga a máquina.
+    -   Instala/Inicia o ComfyUI nela.
+    -   Envia seu workflow.
+    -   Aguarda o processamento.
+    -   **Baixa as imagens geradas** para a pasta `vast_outputs`.
+    -   **Destrói a máquina** imediatamente após o fim (para parar a cobrança).
 
-### Configuração
+## Notas Importantes
 
-1. Crie conta em [vast.ai](https://vast.ai)
-2. Copie sua API Key
-3. Cole no Coolify: `VASTAI_API_KEY=sua_key`
-
-### Comandos (via terminal do container)
-
-```bash
-# Buscar GPUs disponíveis
-python /app/scripts/vastai_manager.py search
-
-# Iniciar GPU
-python /app/scripts/vastai_manager.py start
-
-# Verificar status
-python /app/scripts/vastai_manager.py status
-
-# ⚠️ IMPORTANTE: Parar quando terminar!
-python /app/scripts/vastai_manager.py stop
-```
-
----
-
-## 💰 Estimativa de Custos
-
-| GPU | Preço/Hora | Uso (1h/dia) |
-|-----|------------|--------------|
-| RTX 3090 | $0.20-0.40 | ~$6-12/mês |
-| RTX 4090 | $0.40-0.80 | ~$12-24/mês |
-
----
-
-## 📁 Estrutura
-
-```
-ComfyUI-VastAI/
-├── docker-compose.yml    # Config Docker (editável via Coolify)
-├── .env.example          # Template de variáveis
-├── data/
-│   ├── input/           # Imagens de entrada
-│   ├── output/          # Resultados
-│   └── workflows/       # Seus workflows
-└── scripts/
-    └── vastai_manager.py
-```
-
-## 📄 Licença
-
-MIT
+- **Custom Nodes**: Se seu workflow usa "Custom Nodes", a máquina da Vast.ai precisa tê-los instalados. O script usa uma imagem padrão (`yanwk/comfyui-boot`) que já vem com muitos nodes populares (ComfyUI-Manager, ControlNet, etc). Se faltar algum, o workflow falhará.
+    -   *Dica avançada*: Para workflows muito específicos, você pode precisar editar o script para instalar nodes extras na inicialização (`--onstart-cmd`).
