@@ -1,80 +1,95 @@
 # ComfyUI Híbrido: Coolify + Vast.ai
 
-Este projeto permite que você execute uma instância leve do ComfyUI no seu servidor Coolify (Contabo) para **criar e visualizar** fluxos de trabalho, e use o poder da **Vast.ai** para o processamento pesado de imagens/vídeos sob demanda.
+Execute uma instância leve do ComfyUI no Coolify (para criar workflows) e use GPUs da Vast.ai para processamento pesado sob demanda.
 
-## Estrutura do Projeto
+## 🚀 Quick Start
 
-- **Dockerfile**: Configuração para instalar o ComfyUI no Coolify (modo CPU, baixo consumo).
-- **vastai_runner.py**: Script Python para alugar automaticamente uma GPU na Vast.ai, executar o trabalho e encerrar a máquina (economizando dinheiro).
-- **requirements.txt**: Dependências necessárias.
+### 1. Instale as Dependências (no seu PC)
+```bash
+pip install vastai requests websocket-client
+vastai set api-key SUA_CHAVE_VAST_AI
+```
 
-## Passo 1: Instalação no Coolify
+### 2. Configure o Armazenamento de Modelos
+```bash
+# Primeira vez: cria disco persistente na Vast.ai
+python vastai_runner.py --setup-storage --gpu RTX_4090 --disk 50
+```
 
-1.  Crie um novo recurso no Coolify e selecione sua fonte (GitHub, GitLab, etc.) onde você hospedou estes arquivos.
-2.  O Coolify detectará o `Dockerfile` automaticamente.
-3.  **Configurações de Build**:
-    -   Certifique-se de que a porta exposta seja `8188`.
-4.  **Implante (Deploy)**.
-5.  Após o deploy, você poderá acessar o ComfyUI pelo domínio configurado no Coolify.
-    -   *Nota*: Esta instância roda em CPU. Ela serve para criar os nós (nodes) e salvar o workflow, mas será lenta se tentar gerar imagens complexas nela mesma.
+### 3. Adicione seus Modelos
+```bash
+# Baixar modelo do CivitAI ou HuggingFace
+python vastai_runner.py --add-model "https://civitai.com/.../modelo.safetensors"
 
-## Passo 2: Configuração da Vast.ai
+# Especificar tipo de modelo manualmente
+python vastai_runner.py --add-model "URL" --model-type lora
+```
 
-1.  Crie uma conta na [Vast.ai](https://vast.ai/).
-2.  Adicione créditos à sua conta.
-3.  Vá em **Account** (Conta) -> **API Key** e copie sua chave.
-4.  Instale a ferramenta de linha de comando `vastai` no seu computador (onde você rodará o script de automação):
-    ```bash
-    pip install vastai requests websocket-client
-    ```
-5.  Defina sua chave de API:
-    ```bash
-    vastai set api-key SUA_CHAVE_AQUI
-    ```
+### 4. Execute Workflows
+```bash
+# Rodar um workflow exportado do ComfyUI
+python vastai_runner.py --workflow meu_fluxo.json
+```
 
-## Configuração via Variáveis de Ambiente (Coolify)
+## 📋 Comandos Disponíveis
 
-Se você estiver rodando este script dentro do container do Coolify (ou apenas quiser configurar via sistema), você pode usar as seguintes **Variáveis de Ambiente** na aba "Environment Variables" do seu projeto no Coolify. Isso torna mais seguro e fácil de alterar sem mexer no código.
+| Comando | Descrição |
+|:--------|:----------|
+| `--setup-storage` | Cria disco persistente na Vast.ai |
+| `--add-model <URL>` | Baixa modelo para o disco |
+| `--remove-model <nome>` | Remove modelo do disco |
+| `--list-models` | Lista todos os modelos salvos |
+| `--workflow <arquivo>` | Executa workflow no Vast.ai |
+| `--stop` | Para todas as instâncias (para cobrança) |
 
-| Variável | Descrição | Exemplo |
-| :--- | :--- | :--- |
-| `VAST_API_KEY` | **Obrigatório**. Sua chave de API da Vast.ai. | `81237...` |
-| `VAST_GPU` | (Opcional) Nome da GPU para buscar. Padrão: `RTX_3090`. | `RTX_4090` |
-| `VAST_PRICE` | (Opcional) Preço máximo por hora em dólares. Padrão: `0.5`. | `1.5` |
-| `VAST_KEEP_ALIVE` | (Opcional) Se `true`, não destrói a máquina ao final. | `true` |
+## ⚙️ Opções
 
-*Nota*: Se você definir essas variáveis, não precisa passar argumentos para o script, nem criar o `config.json`. O script dará prioridade para o que estiver nas variáveis de ambiente!
+| Opção | Padrão | Descrição |
+|:------|:-------|:----------|
+| `--gpu` | RTX_3090 | GPU para buscar |
+| `--price` | 0.5 | Preço máximo $/hora |
+| `--disk` | 50 | Tamanho do disco em GB |
+| `--keep-alive` | false | Não destruir instância após workflow |
 
-## Passo 3: Como Usar (Fluxo de Trabalho)
+## 🌐 Variáveis de Ambiente (Coolify)
 
-1.  **Criar o Workflow**:
-    -   Acesse seu ComfyUI no Coolify.
-    -   Monte seu fluxo de trabalho.
-    -   Clique no botão de engrenagem (Configurações) e ative **"Enable Dev mode Options"**.
-    -   Agora aparecerá um botão **"Save (API Format)"**. Clique nele para baixar o arquivo `.json` (ex: `workflow_api.json`).
+Configure no Coolify para rodar do servidor:
 
-2.  **Executar na Vast.ai**:
-    -   No seu computador (Windows), abra o terminal (PowerShell ou CMD) na pasta deste projeto.
-    -   Execute o script `vastai_runner.py` apontando para o arquivo que você baixou:
+| Variável | Descrição |
+|:---------|:----------|
+| `VAST_API_KEY` | Sua chave da Vast.ai |
+| `VAST_GPU` | GPU preferida (ex: RTX_4090) |
+| `VAST_PRICE` | Preço máximo por hora |
 
-    ```bash
-    # Exemplo: Rodar usando uma RTX 3090 (padrão) e gastando no max $0.50/hora
-    python vastai_runner.py --workflow caminho/para/workflow_api.json
-    
-    # Exemplo: Procurar por uma 4090
-    python vastai_runner.py --workflow workflow.json --gpu "RTX_4090" --price 0.8
-    ```
+## 💾 Sobre o Armazenamento Persistente
 
-3.  **O que o script faz**:
-    -   Procura a máquina mais barata na Vast.ai que atenda aos critérios.
-    -   Aluga a máquina.
-    -   Instala/Inicia o ComfyUI nela.
-    -   Envia seu workflow.
-    -   Aguarda o processamento.
-    -   **Baixa as imagens geradas** para a pasta `vast_outputs`.
-    -   **Destrói a máquina** imediatamente após o fim (para parar a cobrança).
+- Os modelos são salvos em `/workspace/models/` na Vast.ai
+- O disco persiste mesmo após desligar a GPU
+- Custo: ~$0.10/GB/mês (50GB = $5/mês)
+- Próxima vez que alugar, os modelos já estarão lá!
 
-## Notas Importantes
+## 📁 Estrutura dos Modelos
 
-- **Custom Nodes**: Se seu workflow usa "Custom Nodes", a máquina da Vast.ai precisa tê-los instalados. O script usa uma imagem padrão (`yanwk/comfyui-boot`) que já vem com muitos nodes populares (ComfyUI-Manager, ControlNet, etc). Se faltar algum, o workflow falhará.
-    -   *Dica avançada*: Para workflows muito específicos, você pode precisar editar o script para instalar nodes extras na inicialização (`--onstart-cmd`).
+```
+/workspace/models/
+├── checkpoints/     # Modelos principais (SD, SDXL, Flux)
+├── loras/           # LoRAs
+├── controlnet/      # ControlNet
+├── vae/             # VAEs
+├── upscale_models/  # Upscalers (ESRGAN, etc)
+├── embeddings/      # Embeddings/Textual Inversion
+├── clip/            # CLIP models
+└── unet/            # UNet models
+```
+
+## ⚠️ Importante
+
+1. **Pare as instâncias** quando terminar para evitar cobranças:
+   ```bash
+   python vastai_runner.py --stop
+   ```
+
+2. O disco persistente tem um custo mensal pequeno mesmo sem GPU rodando.
+
+3. Custom Nodes que precisam de modelos específicos devem ter os modelos adicionados via `--add-model`.
+
