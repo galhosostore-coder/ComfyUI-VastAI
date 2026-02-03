@@ -1,46 +1,71 @@
-# ComfyUI Híbrido: Coolify + Vast.ai
+# ComfyUI Híbrido: Coolify + Vast.ai + Google Drive
 
-Execute uma instância leve do ComfyUI no Coolify (para criar workflows) e use GPUs da Vast.ai para processamento pesado sob demanda.
+Execute ComfyUI leve no Coolify para criar workflows. Use GPUs da Vast.ai sob demanda. Modelos armazenados no seu Google Drive (custo zero).
 
-## 🚀 Quick Start
+## 🚀 Como Funciona
 
-### 1. Instale as Dependências (no seu PC)
+```
+┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
+│  Google Drive   │────▶│   Vast.ai    │────▶│  Imagem Gerada  │
+│  (seus modelos) │     │  (GPU alugada)│     │  (vast_outputs/)│
+└─────────────────┘     └──────────────┘     └─────────────────┘
+```
+
+1. Você armazena os modelos no **Google Drive**
+2. O script analisa seu workflow e baixa **apenas os modelos necessários**
+3. Após gerar, a GPU é destruída (sem custo fixo)
+
+## � Setup Inicial
+
+### 1. Instale as Dependências
 ```bash
-pip install vastai requests websocket-client
+pip install vastai requests gdown
 vastai set api-key SUA_CHAVE_VAST_AI
 ```
 
-### 2. Configure o Armazenamento de Modelos
-```bash
-# Primeira vez: cria disco persistente na Vast.ai
-python vastai_runner.py --setup-storage --gpu RTX_4090 --disk 50
+### 2. Configure seus Modelos no Google Drive
+
+1. Suba seus modelos para o Google Drive
+2. Compartilhe cada arquivo como **"Qualquer pessoa com o link"**
+3. Copie o link de cada modelo
+
+### 3. Configure o `config.json`
+
+Crie um arquivo `config.json` baseado no exemplo:
+
+```json
+{
+    "api_key": "sua_chave_vast_ai",
+    "gpu_query": "RTX_4090",
+    "max_price": 0.8,
+    "gdrive_models": {
+        "checkpoints": {
+            "sd_xl_base_1.0.safetensors": "https://drive.google.com/file/d/ABC123/view"
+        },
+        "loras": {
+            "meu_lora.safetensors": "https://drive.google.com/file/d/XYZ789/view"
+        },
+        "vae": {},
+        "controlnet": {},
+        "upscale_models": {},
+        "embeddings": {},
+        "clip": {}
+    }
+}
 ```
 
-### 3. Adicione seus Modelos
-```bash
-# Baixar modelo do CivitAI ou HuggingFace
-python vastai_runner.py --add-model "https://civitai.com/.../modelo.safetensors"
+## 🎨 Uso
 
-# Especificar tipo de modelo manualmente
-python vastai_runner.py --add-model "URL" --model-type lora
-```
-
-### 4. Execute Workflows
+### Executar um Workflow
 ```bash
-# Rodar um workflow exportado do ComfyUI
+# O script analisa o workflow e baixa apenas os modelos necessários
 python vastai_runner.py --workflow meu_fluxo.json
 ```
 
-## 📋 Comandos Disponíveis
-
-| Comando | Descrição |
-|:--------|:----------|
-| `--setup-storage` | Cria disco persistente na Vast.ai |
-| `--add-model <URL>` | Baixa modelo para o disco |
-| `--remove-model <nome>` | Remove modelo do disco |
-| `--list-models` | Lista todos os modelos salvos |
-| `--workflow <arquivo>` | Executa workflow no Vast.ai |
-| `--stop` | Para todas as instâncias (para cobrança) |
+### Parar Cobrança
+```bash
+python vastai_runner.py --stop
+```
 
 ## ⚙️ Opções
 
@@ -48,48 +73,33 @@ python vastai_runner.py --workflow meu_fluxo.json
 |:------|:-------|:----------|
 | `--gpu` | RTX_3090 | GPU para buscar |
 | `--price` | 0.5 | Preço máximo $/hora |
-| `--disk` | 50 | Tamanho do disco em GB |
-| `--keep-alive` | false | Não destruir instância após workflow |
+| `--keep-alive` | false | Manter instância após workflow |
 
-## 🌐 Variáveis de Ambiente (Coolify)
+## 📁 Estrutura de Pastas no GDrive
 
-Configure no Coolify para rodar do servidor:
-
-| Variável | Descrição |
-|:---------|:----------|
-| `VAST_API_KEY` | Sua chave da Vast.ai |
-| `VAST_GPU` | GPU preferida (ex: RTX_4090) |
-| `VAST_PRICE` | Preço máximo por hora |
-
-## 💾 Sobre o Armazenamento Persistente
-
-- Os modelos são salvos em `/workspace/models/` na Vast.ai
-- O disco persiste mesmo após desligar a GPU
-- Custo: ~$0.10/GB/mês (50GB = $5/mês)
-- Próxima vez que alugar, os modelos já estarão lá!
-
-## 📁 Estrutura dos Modelos
+Organize seus modelos assim (opcional, mas ajuda):
 
 ```
-/workspace/models/
-├── checkpoints/     # Modelos principais (SD, SDXL, Flux)
-├── loras/           # LoRAs
-├── controlnet/      # ControlNet
-├── vae/             # VAEs
-├── upscale_models/  # Upscalers (ESRGAN, etc)
-├── embeddings/      # Embeddings/Textual Inversion
-├── clip/            # CLIP models
-└── unet/            # UNet models
+📁 Meus Modelos ComfyUI/
+├── 📁 checkpoints/
+│   ├── sd_xl_base_1.0.safetensors
+│   └── flux1-dev.safetensors
+├── 📁 loras/
+│   └── meu_estilo.safetensors
+└── 📁 controlnet/
+    └── control_v11p_canny.pth
 ```
+
+## 💰 Custos
+
+| Item | Custo |
+|:-----|:------|
+| Google Drive | Grátis (15GB) ou R$10/mês (100GB) |
+| Vast.ai GPU | ~$0.30-1.00/hora (só quando usar) |
+| **Custo Fixo Mensal** | **$0** |
 
 ## ⚠️ Importante
 
-1. **Pare as instâncias** quando terminar para evitar cobranças:
-   ```bash
-   python vastai_runner.py --stop
-   ```
-
-2. O disco persistente tem um custo mensal pequeno mesmo sem GPU rodando.
-
-3. Custom Nodes que precisam de modelos específicos devem ter os modelos adicionados via `--add-model`.
-
+1. **Modelos grandes = download lento**: Um checkpoint de 6GB pode demorar alguns minutos para baixar
+2. **Sempre pare a instância**: Use `--stop` ou o script destrói automaticamente após o workflow
+3. **Links precisam ser públicos**: Configure "Qualquer pessoa com o link" no GDrive
