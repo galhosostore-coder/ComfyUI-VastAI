@@ -78,6 +78,19 @@ python vastai_runner.py --workflow examples/simple_txt2img.json
 
 _(O `run.sh` é um atalho criado automaticamente pelo setup que já usa o ambiente virtual)_
 
+### 🐳 Rodando via Docker (Localmente)
+
+Se você preferir rodar tudo isolado via Docker no seu PC:
+
+1. Crie um arquivo `.env` com suas chaves (use o modelo `.env.example`).
+2. Rode:
+   ```bash
+   docker-compose up -d
+   ```
+3. Acesse: `http://localhost:8188`
+
+As pastas `output`, `input` e `custom_nodes` estarão sincronizadas com seu Windows.
+
 ---
 
 ## � Sincronização Automática (Novo!)

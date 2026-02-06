@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  comfyui:
+    build: .
+    container_name: comfyui-vastai-local
+    restart: unless-stopped
+    ports:
+      - "8188:8188"
+    volumes:
+      # Persist data to local folders
+      - ./output:/app/output
+      - ./input:/app/input
+      - ./user:/app/user
+      - ./custom_nodes:/app/custom_nodes
+      # Optional: Mount your local models if you have them downloaded
+      # - ./VastAI_Models/checkpoints:/app/models/checkpoints
+      # - ./VastAI_Models/loras:/app/models/loras
+
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Set your keys here or create a .env file
+      - VAST_API_KEY=${VAST_API_KEY}
+      - GDRIVE_FOLDER_ID=${GDRIVE_FOLDER_ID}
+      - VAST_GPU=${VAST_GPU:-RTX_3090}
+      - VAST_PRICE=${VAST_PRICE:-0.5}
+    # Default command from Dockerfile (runs sync + comfyui)
+    # command: sh -c "python sync_models.py && python main.py --listen 0.0.0.0 --port 8188 --cpu"
