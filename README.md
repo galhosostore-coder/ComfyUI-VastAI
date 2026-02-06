@@ -72,6 +72,18 @@ python vastai_runner.py --env-help
 | `--price 1.0` | Preço máximo diferente |
 | `--keep-alive` | Não destruir após rodar |
 
+## 🧩 Custom Nodes Extras
+
+Quer usar nodes customizados que não vêm no padrão?
+
+1. Crie um arquivo `custom_nodes.txt` na raiz da sua pasta no Google Drive.
+2. Liste os links do GitHub dos nodes que você quer:
+   ```text
+   https://github.com/ltdrdata/ComfyUI-Manager.git
+   https://github.com/cubiq/ComfyUI_IPAdapter_plus.git
+   ```
+3. O script vai instalar automaticamente antes de iniciar!
+
 ## 💰 Custos
 
 | Item | Custo |

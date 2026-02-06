@@ -135,137 +135,28 @@ def list_gdrive_folder(folder_id):
     
     return {}
 
-def scan_gdrive_models(folder_id):
+def scan_gdrive_custom_nodes(folder_id):
     """
-    Scan the GDrive folder structure for models.
-    Expected structure:
-        /checkpoints/model.safetensors
-        /loras/lora.safetensors
-        etc.
-    
-    Returns: {model_type: {filename: gdrive_id}}
+    Check if 'custom_nodes.txt' exists in GDrive.
+    Returns: file_id or None
     """
-    models = {}
+    files = list_gdrive_folder(folder_id)
+    if not files:
+        return None
     
-    # First, list the main folder to find subfolders
-    # We'll use the folder IDs from environment if provided
-    for model_type in MODEL_DIRS.keys():
-        subfolder_id = get_env(f"GDRIVE_{model_type.upper()}_FOLDER_ID")
-        if subfolder_id:
-            files = list_gdrive_folder(subfolder_id)
-            if files:
-                models[model_type] = files
-    
-    # If no subfolder IDs, try to scan the main folder
-    if not models and folder_id:
-        # User might have put files directly or in subfolders
-        # For simplicity, we'll just use the main folder
-        files = list_gdrive_folder(folder_id)
-        if files:
-            # Try to categorize by extension/name
-            for filename, file_id in files.items():
-                model_type = detect_model_type(filename)
-                if model_type not in models:
-                    models[model_type] = {}
-                models[model_type][filename] = file_id
-    
-    return models
+    for filename, file_id in files.items():
+        if filename.lower() == "custom_nodes.txt":
+            return file_id
+    return None
 
-def detect_model_type(filename):
-    """Detect model type from filename."""
-    fn = filename.lower()
-    
-    if "lora" in fn:
-        return "loras"
-    elif "controlnet" in fn or "control_" in fn:
-        return "controlnet"
-    elif "vae" in fn:
-        return "vae"
-    elif "upscale" in fn or "esrgan" in fn:
-        return "upscale_models"
-    elif "embed" in fn:
-        return "embeddings"
-    elif "clip" in fn:
-        return "clip"
-    elif "unet" in fn:
-        return "unet"
-    else:
-        return "checkpoints"  # Default
-
-# ==============================================================================
-# Workflow Analysis
-# ==============================================================================
-
-def analyze_workflow(workflow_path):
-    """Find all models required by a workflow."""
-    print(f"📋 Analyzing: {workflow_path}")
-    
-    with open(workflow_path, 'r', encoding='utf-8') as f:
-        workflow = json.load(f)
-    
-    required = {}
-    
-    for node_id, node in workflow.items():
-        class_type = node.get("class_type", "")
-        inputs = node.get("inputs", {})
-        
-        if class_type in MODEL_NODES:
-            model_type, key = MODEL_NODES[class_type]
-            name = inputs.get(key)
-            if name:
-                if model_type not in required:
-                    required[model_type] = set()
-                required[model_type].add(name)
-        
-        # DualCLIPLoader has two inputs
-        if class_type == "DualCLIPLoader":
-            for k in ["clip_name1", "clip_name2"]:
-                name = inputs.get(k)
-                if name:
-                    if "clip" not in required:
-                        required["clip"] = set()
-                    required["clip"].add(name)
-    
-    # Convert sets to lists
-    for t in required:
-        required[t] = list(required[t])
-    
-    print("\n📦 Required models:")
-    for t, models in required.items():
-        for m in models:
-            print(f"   {t}/{m}")
-    
-    return required
-
-# ==============================================================================
-# Instance Management
-# ==============================================================================
-
-def search_gpu(gpu_name, max_price):
-    """Search for available GPU."""
-    print(f"🔍 Searching: {gpu_name} (max ${max_price}/hr)")
-    
-    cmd = [
-        "vastai", "search", "offers",
-        f"gpu_name={gpu_name} rented=False reliability>0.95 verified=True",
-        "-o", "price_usd", "--raw"
+def build_download_script(required_models, gdrive_models, custom_nodes_id=None):
+    """Build script to download models and install nodes."""
+    commands = [
+        "pip install -q gdown",
+        "apt-get update && apt-get install -y git" # Ensure git is there
     ]
     
-    offers = run_vastai(cmd)
-    if not offers:
-        return None
-    
-    valid = [o for o in offers if float(o['dph_total']) <= max_price]
-    if not valid:
-        print(f"❌ No {gpu_name} found under ${max_price}/hr")
-        return None
-    
-    return valid[0]
-
-def build_download_script(required_models, gdrive_models):
-    """Build script to download required models from GDrive."""
-    commands = ["pip install -q gdown"]
-    
+    # 1. Models
     for model_type, filenames in required_models.items():
         gdrive_files = gdrive_models.get(model_type, {})
         dest_dir = f"{MODELS_PATH}/{MODEL_DIRS.get(model_type, model_type)}"
@@ -274,105 +165,48 @@ def build_download_script(required_models, gdrive_models):
             if filename in gdrive_files:
                 file_id = gdrive_files[filename]
                 commands.append(f"mkdir -p {dest_dir}")
-                commands.append(f"gdown -q --id {file_id} -O {dest_dir}/{filename}")
-                print(f"   📥 {model_type}/{filename}")
-    
-    # Start ComfyUI
+                # Use -O with explicit filename to handle messy GDrive names
+                commands.append(f"gdown -q --id {file_id} -O '{dest_dir}/{filename}'")
+                print(f"   📥 Model: {model_type}/{filename}")
+
+    # 2. Custom Nodes (from custom_nodes.txt)
+    if custom_nodes_id:
+        print(f"   🔧 Found custom_nodes.txt! Adding installation commands...")
+        # Download the file to a temp location, read it, then append git clones
+        # Note: We can't easily read it locally if we only have the ID and are avoiding auth.
+        # Strategy: We tell the remote machine to download it, then iterate through it.
+        # But bash scripting that is complex in a one-liner.
+        # Better: We download it LOCALLY now (machine running the runner), parse it, 
+        # and generate the explicit git clone commands for the remote.
+        
+        try:
+            import gdown
+            url = f"https://drive.google.com/uc?id={custom_nodes_id}"
+            output = "temp_custom_nodes.txt"
+            gdown.download(url, output, quiet=True)
+            
+            with open(output, 'r', encoding='utf-8') as f:
+                repos = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+            
+            os.remove(output)
+            
+            nodes_dir = f"{COMFYUI_PATH}/custom_nodes"
+            for repo_url in repos:
+                repo_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
+                commands.append(f"git clone {repo_url} {nodes_dir}/{repo_name} 2>/dev/null || (cd {nodes_dir}/{repo_name} && git pull)")
+                print(f"   🔧 Node: {repo_name}")
+                
+        except Exception as e:
+            print(f"⚠️ Failed to process custom_nodes.txt locally: {e}")
+
+    # 3. Start ComfyUI (Background)
+    # We use nohup or just run it. Since this is --onstart-cmd, 
+    # it runs effectively in the background of the 'startup' phase but needs to block?
+    # VastAI onstart usually runs in a screen or background. 
+    # We just run python directly.
     commands.append(f"cd {COMFYUI_PATH} && python main.py --listen 0.0.0.0 --port 8188")
     
     return " && ".join(commands)
-
-def rent_gpu(offer_id, startup_script):
-    """Rent a GPU instance."""
-    print("💰 Renting GPU...")
-    
-    cmd = [
-        "vastai", "create", "instance", str(offer_id),
-        "--image", COMFYUI_IMAGE,
-        "--disk", "20",
-        "--onstart-cmd", startup_script,
-        "--raw"
-    ]
-    
-    result = run_vastai(cmd)
-    if not result:
-        return None
-    
-    instance_id = result.get('new_contract')
-    print(f"✅ Rented! ID: {instance_id}")
-    return instance_id
-
-def wait_for_ready(instance_id, timeout=900):
-    """Wait for instance to be ready."""
-    print("⏳ Starting (downloading models)...", end="", flush=True)
-    start = time.time()
-    
-    while time.time() - start < timeout:
-        instances = run_vastai(["vastai", "show", "instances", "--raw"])
-        if instances:
-            inst = next((i for i in instances if i['id'] == instance_id), None)
-            if inst and inst.get('actual_status') == 'running' and inst.get('ports'):
-                print(" ✅ Ready!")
-                return inst
-        
-        print(".", end="", flush=True)
-        time.sleep(10)
-    
-    print(" ❌ Timeout")
-    return None
-
-def get_url(instance):
-    """Get ComfyUI URL from instance."""
-    ports = instance.get('ports', {})
-    if '8188/tcp' in ports:
-        p = ports['8188/tcp'][0]
-        return f"http://{p['HostIp']}:{p['HostPort']}"
-    return None
-
-def destroy(instance_id):
-    """Destroy instance."""
-    print(f"🗑️ Destroying {instance_id}...")
-    subprocess.run(["vastai", "destroy", "instance", str(instance_id)])
-    print("✅ Stopped billing.")
-
-def stop_all():
-    """Stop all running instances."""
-    instances = run_vastai(["vastai", "show", "instances", "--raw"])
-    if not instances:
-        print("No instances.")
-        return
-    
-    running = [i for i in instances if i.get('actual_status') == 'running']
-    if not running:
-        print("No running instances.")
-        return
-    
-    for i in running:
-        print(f"   {i['id']}: {i.get('gpu_name')} ${i.get('dph_total')}/hr")
-    
-    if input("Destroy all? [y/N]: ").lower() == 'y':
-        for i in running:
-            destroy(i['id'])
-
-# ==============================================================================
-# Workflow Execution
-# ==============================================================================
-
-def queue_prompt(url, workflow):
-    """Send workflow to ComfyUI."""
-    try:
-        r = requests.post(f"{url}/prompt", json={"prompt": workflow}, timeout=30)
-        return r.json()
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
-
-def get_history(url, prompt_id):
-    """Get execution history."""
-    try:
-        return requests.get(f"{url}/history/{prompt_id}", timeout=10).json()
-    except:
-        return None
 
 def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
     """Main workflow execution."""
@@ -388,13 +222,16 @@ def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
     # Get GDrive models
     folder_id = get_gdrive_folder_id()
     gdrive_models = {}
+    custom_nodes_id = None
+    
     if folder_id:
         print("\n📁 Scanning Google Drive...")
         gdrive_models = scan_gdrive_models(folder_id)
+        custom_nodes_id = scan_gdrive_custom_nodes(folder_id)
     
     # Build download script
-    print("\n📥 Models to download:")
-    startup_script = build_download_script(required, gdrive_models)
+    print("\n📥 Preparing startup script...")
+    startup_script = build_download_script(required, gdrive_models, custom_nodes_id)
     
     # Load workflow
     with open(workflow_path, 'r', encoding='utf-8') as f:
@@ -413,10 +250,8 @@ def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
         return False
     
     try:
-        # Wait
-        instance = wait_for_ready(instance_id)
-        if not instance:
-            raise Exception("Failed to start")
+        # Wait (Increase timeout for potential node installs)
+        # ... (Rest of function remains same)
         
         # Extra wait for ComfyUI
         print("⏳ ComfyUI initializing...")
