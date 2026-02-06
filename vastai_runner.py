@@ -110,8 +110,6 @@ def setup_api_key():
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return api_key
 
-    return api_key
-
 @retry_with_backoff(retries=3, backoff_in_seconds=2)
 def run_vastai(cmd):
     """Run vastai command and return JSON result."""
@@ -169,7 +167,6 @@ def list_gdrive_recursive(folder_id):
                      f_id = f.url.split('id=')[-1]
                      result[clean_path] = f_id
             
-        return result
         return result
     except Exception as e:
         print(f"⚠️ Warning: GDrive scan failed: {e}")
@@ -296,9 +293,11 @@ def build_download_script(required_models, gdrive_models, custom_nodes_id=None):
     # it runs effectively in the background of the 'startup' phase but needs to block?
     # VastAI onstart usually runs in a screen or background. 
     # We just run python directly.
+    # We use semicolon to ensure ComfyUI starts even if some downloads fail
+    # This is critical for resilience.
     commands.append(f"cd {COMFYUI_PATH} && python main.py --listen 0.0.0.0 --port 8188")
     
-    return " && ".join(commands)
+    return "; ".join(commands)
 
 # ==============================================================================
 # Model Detection & Workflow Analysis
