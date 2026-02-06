@@ -24,6 +24,27 @@ import requests
 import sys
 import subprocess
 from urllib.request import urlretrieve
+import functools
+
+def retry_with_backoff(retries=3, backoff_in_seconds=5):
+    """Retry decorator with exponential backoff."""
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            x = 0
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if x == retries:
+                        print(f"❌ Failed after {retries} retries: {e}")
+                        raise
+                    sleep_time = (backoff_in_seconds * 2 ** x)
+                    print(f"⚠️ Error: {e}. Retrying in {sleep_time}s...")
+                    time.sleep(sleep_time)
+                    x += 1
+        return wrapper
+    return decorator
 
 # ==============================================================================
 # Configuration from Environment Variables
@@ -89,11 +110,19 @@ def setup_api_key():
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return api_key
 
+    return api_key
+
+@retry_with_backoff(retries=3, backoff_in_seconds=2)
 def run_vastai(cmd):
     """Run vastai command and return JSON result."""
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        return None
+        # Check if it's a "No offers" benign error or real error
+        if "No offers" in result.stdout:
+            # We don't raise here, we return None to let caller handle
+            return None
+        raise Exception(f"VastAI CLI Error: {result.stderr} {result.stdout}")
+        
     try:
         return json.loads(result.stdout)
     except:
@@ -141,8 +170,10 @@ def list_gdrive_recursive(folder_id):
                      result[clean_path] = f_id
             
         return result
+        return result
     except Exception as e:
-        # Fallback/Silent error
+        print(f"⚠️ Warning: GDrive scan failed: {e}")
+        # Return empty but don't crash, maybe GDrive down
         return {}
 
 def list_gdrive_folder(folder_id):
