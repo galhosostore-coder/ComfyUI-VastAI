@@ -1,0 +1,29 @@
+# Python & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+.venv
+env/
+venv/
+.DS_Store
+
+# ComfyUI Models & Outputs (Local)
+models/
+output/
+input/
+temp/
+user/
+custom_nodes/
+!custom_nodes/ComfyUI-GDrive-Sync/
+
+# Docker/VastAI Specifics
+VastAI_Models/
+vast_outputs/
+.drive_cache.json
+*.log
+
+# IDE
+.vscode/
+.idea/

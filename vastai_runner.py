@@ -269,6 +269,216 @@ def build_download_script(required_models, gdrive_models, custom_nodes_id=None):
     
     return " && ".join(commands)
 
+# ==============================================================================
+# Model Detection & Workflow Analysis
+# ==============================================================================
+
+def detect_model_type(filename):
+    """Detect model type from filename extension or keywords users might use."""
+    fn = filename.lower()
+    if "lora" in fn: return "loras"
+    if "control" in fn: return "controlnet"
+    if "vae" in fn: return "vae"
+    if "upscale" in fn or "esrgan" in fn: return "upscale_models"
+    if "clip" in fn or "t5" in fn: return "clip"
+    if "unet" in fn: return "unet"
+    return "checkpoints"
+
+def analyze_workflow(workflow_path):
+    """Find all models required by a workflow JSON."""
+    print(f"📋 Analyzing: {workflow_path}")
+    try:
+        with open(workflow_path, 'r', encoding='utf-8') as f:
+            workflow = json.load(f)
+    except Exception as e:
+        print(f"❌ Failed to load workflow: {e}")
+        return {}
+    
+    required = {}
+    
+    for node_id, node in workflow.items():
+        class_type = node.get("class_type", "")
+        inputs = node.get("inputs", {})
+        
+        # Check standard model loaders
+        if class_type in MODEL_NODES:
+            model_type, key = MODEL_NODES[class_type]
+            name = inputs.get(key)
+            if name and isinstance(name, str):
+                if model_type not in required: required[model_type] = set()
+                required[model_type].add(name)
+        
+        # Special cases
+        if class_type == "DualCLIPLoader":
+            for k in ["clip_name1", "clip_name2"]:
+                name = inputs.get(k)
+                if name:
+                    if "clip" not in required: required["clip"] = set()
+                    required["clip"].add(name)
+    
+    # Convert sets to sorted lists
+    for t in required:
+        required[t] = sorted(list(required[t]))
+        
+    print("\n📦 Required models found:")
+    for t, models in required.items():
+        for m in models:
+            print(f"   - {t}: {m}")
+            
+    return required
+
+# ==============================================================================
+# Vast Internal Logic
+# ==============================================================================
+
+def search_gpu(gpu_name, max_price):
+    """Search for the best available GPU offer."""
+    print(f"\n🔍 Searching for {gpu_name} (max ${max_price}/hr)...")
+    
+    # Verify verified=True, rented=False
+    query = f"gpu_name={gpu_name} rented=False verified=True reliability>0.95"
+    cmd = [
+        "vastai", "search", "offers", 
+        query, 
+        "-o", "price_usd",  # Order by price ascending
+        "--raw"
+    ]
+    
+    offers = run_vastai(cmd)
+    if not offers:
+        print("❌ No offers returned from Vast.ai API.")
+        return None
+        
+    # Filter by price manually to be safe
+    valid_offers = []
+    for offer in offers:
+        try:
+            price = float(offer.get('dph_total', 999))
+            if price <= max_price:
+                valid_offers.append(offer)
+        except:
+            continue
+            
+    if not valid_offers:
+        print(f"❌ No {gpu_name} instances found under ${max_price}/hr.")
+        return None
+        
+    best = valid_offers[0]
+    print(f"✅ Found: ID {best['id']} | {best['gpu_name']} | ${best['dph_total']}/hr | {best['dlperf']} DLPerf")
+    return best
+
+def rent_gpu(offer_id, startup_script):
+    """Rent the specific GPU offer."""
+    print(f"\n💰 Renting instance {offer_id}...")
+    
+    # We use the raw startup script in onstart-cmd
+    cmd = [
+        "vastai", "create", "instance", str(offer_id),
+        "--image", COMFYUI_IMAGE,
+        "--disk", "20",
+        "--onstart-cmd", startup_script,
+        "--raw"
+    ]
+    
+    result = run_vastai(cmd)
+    if not result or 'new_contract' not in result:
+        print(f"❌ Failed to rent instance: {result}")
+        return None
+        
+    instance_id = result['new_contract']
+    print(f"✅ Contract signed! Instance ID: {instance_id}")
+    return instance_id
+
+def wait_for_ready(instance_id, timeout=600):
+    """Wait for the instance to boot and ComfyUI to respond."""
+    print(f"\n⏳ Waiting for instance {instance_id} to become ready (Timeout: {timeout}s)...")
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        # Check instance status
+        instances = run_vastai(["vastai", "show", "instances", "--raw"])
+        if not instances:
+            print(".", end="", flush=True)
+            time.sleep(5)
+            continue
+            
+        # Find our instance
+        current = next((i for i in instances if str(i['id']) == str(instance_id)), None)
+        
+        if not current:
+            print("?", end="", flush=True) # Instance not found yet?
+            time.sleep(5)
+            continue
+            
+        status = current.get('actual_status')
+        
+        if status == 'running':
+            # Check if ports are mapped
+            url = get_url(current)
+            if url:
+                 print(f"\n🚀 Instance is RUNNING at {url}")
+                 return current
+        
+        print(f"[{status}]", end="", flush=True)
+        time.sleep(10)
+        
+    print(f"\n❌ Timeout waiting for instance {instance_id}.")
+    destroy(instance_id) # Cleanup
+    return None
+
+def get_url(instance):
+    """Extract http URL from instance data."""
+    if 'ports' not in instance: return None
+    
+    # Vast.ai mapping: 8188/tcp -> [{'HostIp': '...', 'HostPort': '...'}]
+    ports = instance['ports']
+    if '8188/tcp' in ports and ports['8188/tcp']:
+        mapping = ports['8188/tcp'][0]
+        return f"http://{mapping['HostIp']}:{mapping['HostPort']}"
+    return None
+
+def destroy(instance_id):
+    """Destroy the instance to stop billing."""
+    print(f"\n🗑️  Destroying instance {instance_id}...")
+    run_vastai(["vastai", "destroy", "instance", str(instance_id)])
+    print("✅ Instance destroyed. Billing stopped.")
+
+def stop_all():
+    """Stop all instances owned by user."""
+    print("\n🛑 Stopping ALL instances...")
+    instances = run_vastai(["vastai", "show", "instances", "--raw"])
+    if not instances:
+        print("No active instances found.")
+        return
+        
+    for i in instances:
+        print(f"   - Destorying {i['id']} ({i['gpu_name']})")
+        destroy(i['id'])
+
+# ==============================================================================
+# ComfyUI API Usage
+# ==============================================================================
+
+def queue_prompt(url, workflow):
+    """Submit workflow to ComfyUI API."""
+    try:
+        p = {"prompt": workflow}
+        r = requests.post(f"{url}/prompt", json=p, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        print(f"❌ Error queuing prompt: {e}")
+        return None
+
+def get_history(url, prompt_id):
+    """Get history for a specific prompt_id."""
+    try:
+        r = requests.get(f"{url}/history/{prompt_id}", timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except:
+        return None
+
 def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
     """Main workflow execution."""
     print("=" * 50)

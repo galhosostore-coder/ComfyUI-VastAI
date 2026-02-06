@@ -1,6 +1,8 @@
 import os
 import sys
 import subprocess
+import json
+import time
 
 # Standard ComfyUI model folder structure
 MODEL_MAP = {
@@ -14,6 +16,9 @@ MODEL_MAP = {
     "unet": "models/unet",
     "clip_vision": "models/clip_vision"
 }
+
+CACHE_FILE = "/app/.drive_cache.json"
+CACHE_TTL = 3600  # 1 hour
 
 def install_gdown():
     try:
@@ -38,16 +43,40 @@ def touch_file(path):
 
 def list_gdrive_recursive(folder_id):
     import gdown
+    
+    # Check cache
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                cache = json.load(f)
+            if time.time() - cache.get('timestamp', 0) < CACHE_TTL and cache.get('folder_id') == folder_id:
+                print("⚡ Using cached GDrive file list.")
+                return cache.get('files', [])
+        except:
+            pass # Ignore cache errors
+            
+    # Fetch fresh
+    print("cloud scanning...")
     url = f"https://drive.google.com/drive/folders/{folder_id}"
     try:
-        # gdown returns list of objects with .path and .url
         files = gdown.download_folder(url, skip_download=True, quiet=True, use_cookies=False)
         paths = []
         for f in files:
             if hasattr(f, 'path'):
-                # Clean path: remove leading ./ or / and backslashes
                 clean = f.path.replace('\\', '/').lstrip('./')
                 paths.append(clean)
+        
+        # Save cache
+        try:
+            with open(CACHE_FILE, 'w') as f:
+                json.dump({
+                    'timestamp': time.time(),
+                    'folder_id': folder_id,
+                    'files': paths
+                }, f)
+        except:
+            pass
+            
         return paths
     except Exception as e:
         print(f"⚠️ Error scanning Drive: {e}")
@@ -66,7 +95,6 @@ def main():
     
     count = 0
     for file_path in files:
-        # file_path example: "checkpoints/sd_xl.safetensors"
         parts = file_path.split('/')
         if len(parts) < 2:
             continue
@@ -74,7 +102,6 @@ def main():
         category = parts[0].lower()
         filename = parts[-1]
         
-        # Remap categories that don't match exactly
         if category == "text_encoders": category = "clip"
         elif category == "diffusion_models": category = "unet"
         
@@ -84,7 +111,7 @@ def main():
             touch_file(local_path)
             count += 1
             
-    print(f"✅ Synced {count} dummy models. They will appear in ComfyUI menus.")
+    print(f"✅ Synced {count} dummy models.")
 
 if __name__ == "__main__":
     main()

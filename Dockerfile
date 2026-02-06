@@ -42,6 +42,9 @@ RUN pip install --no-cache-dir -r /tmp/custom_requirements.txt && \
 COPY vastai_runner.py /app/vastai_runner.py
 COPY sync_models.py /app/sync_models.py
 
+# Copy internal Custom Node for Sync
+COPY custom_nodes/ComfyUI-GDrive-Sync /app/custom_nodes/ComfyUI-GDrive-Sync
+
 # Create storage directories
 # Tuned: Setup volumes for Coolify persistence
 VOLUME /app/input
