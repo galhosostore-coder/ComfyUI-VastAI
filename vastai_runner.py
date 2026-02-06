@@ -337,7 +337,9 @@ def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
                 print(" ✅")
                 
                 # Download outputs
-                os.makedirs("vast_outputs", exist_ok=True)
+                # Save to standard 'output' folder so it persists (if mounted) or is easy to find
+                output_dir = "output"
+                os.makedirs(output_dir, exist_ok=True)
                 outputs = history[prompt_id].get('outputs', {})
                 
                 for node_id, out in outputs.items():
@@ -346,14 +348,14 @@ def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
                             fn = img['filename']
                             img_url = f"{url}/view?filename={fn}&type={img.get('type','output')}&subfolder={img.get('subfolder','')}"
                             print(f"📥 {fn}")
-                            urlretrieve(img_url, f"vast_outputs/{fn}")
+                            urlretrieve(img_url, f"{output_dir}/{fn}")
                 
                 break
             
             print(".", end="", flush=True)
             time.sleep(3)
         
-        print(f"\n✅ Done! → vast_outputs/")
+        print(f"\n✅ Done! → {output_dir}/")
         
     except KeyboardInterrupt:
         print("\n⚠️ Cancelled")

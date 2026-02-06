@@ -40,7 +40,7 @@ Adicione estas variáveis na aba **Environment Variables**:
 
 **\*Como pegar o Folder ID:**
 ```
-Link: https://drive.google.com/drive/folders/1MoYmMMAf5gpYOEuYNrem4bQjXLqj6VY9
+Link: https://drive.google.com/drive/folders/1MoYmNNAf7gpYOEuYNrem4bQjXLqj6VY9
                                           ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
                                           Este é o FOLDER_ID
 ```
