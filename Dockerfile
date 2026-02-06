@@ -35,7 +35,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install extra dependencies for our Vast.ai runner script
 # Tuned: Allows running the vastai automation directly from this container if needed
 COPY requirements.txt /tmp/custom_requirements.txt
-RUN pip install --no-cache-dir -r /tmp/custom_requirements.txt
+RUN pip install --no-cache-dir -r /tmp/custom_requirements.txt && \
+    pip install --no-cache-dir gdown
+
+# Copy our custom scripts
+COPY vastai_runner.py /app/vastai_runner.py
+COPY sync_models.py /app/sync_models.py
 
 # Create storage directories
 # Tuned: Setup volumes for Coolify persistence
@@ -48,7 +53,6 @@ VOLUME /app/models
 # Expose port
 EXPOSE 8188
 
-# Start ComfyUI in CPU mode and listen on all interfaces
-# Tuned: "--cpu" flag forces CPU mode even if standard torch is present (safety)
-CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--cpu"]
-
+# Start Sync + ComfyUI
+# Tuned: Runs sync_models.py (if gdrive configured) before starting ComfyUI
+CMD sh -c "python sync_models.py && python main.py --listen 0.0.0.0 --port 8188 --cpu"

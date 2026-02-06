@@ -111,29 +111,90 @@ def get_gdrive_folder_id():
         return None
     return folder_id
 
-def list_gdrive_folder(folder_id):
+def list_gdrive_recursive(folder_id):
     """
-    List files in a public Google Drive folder using gdown.
-    Returns dict: {filename: file_id}
+    List ALL files in a GDrive folder recursively.
+    Returns: { "path/to/file.ext": "file_id" }
     """
     try:
         import gdown
     except ImportError:
+        print("⚠️ gdown module not found")
         return {}
-    
-    # gdown can list folder contents
-    # Format: https://drive.google.com/drive/folders/FOLDER_ID
+
     url = f"https://drive.google.com/drive/folders/{folder_id}"
-    
     try:
-        # This returns list of (id, name, is_folder)
-        files = gdown.download_folder(url, skip_download=True, quiet=True)
-        if files:
-            return {f[1]: f[0] for f in files if not f[2]}  # name: id, skip folders
-    except:
-        pass
+        # gdown.download_folder with skip_download=True returns a list of file objects
+        # We handle the structure assuming recent gdown versions
+        files = gdown.download_folder(url, skip_download=True, quiet=True, use_cookies=False)
+        result = {}
+        
+        for f in files:
+            # f might be an object with .path (relative) and .url (with ID)
+            if hasattr(f, 'path') and hasattr(f, 'url'):
+                 # Clean path: remove leading ./ or / and backslashes
+                 clean_path = f.path.replace('\\', '/').lstrip('./')
+                 
+                 # Extract ID
+                 if 'id=' in f.url:
+                     f_id = f.url.split('id=')[-1]
+                     result[clean_path] = f_id
+            
+        return result
+    except Exception as e:
+        # Fallback/Silent error
+        return {}
+
+def list_gdrive_folder(folder_id):
+    """Legacy wrapper for compatibility if needed, or simple flat listing."""
+    # We redirect to recursive for now as it's more robust
+    flat = {}
+    recursive = list_gdrive_recursive(folder_id)
+    for path, fid in recursive.items():
+        filename = path.split('/')[-1]
+        flat[filename] = fid
+    return flat
+
+def scan_gdrive_models(folder_id):
+    """
+    Scan GDrive folder and map files to model types based on folder structure.
+    """
+    models = {}
     
-    return {}
+    # 1. Get all files recursively
+    print("   ...fetching file list from Google Drive (this may take a moment)...")
+    all_files = list_gdrive_recursive(folder_id)
+    
+    for path, file_id in all_files.items():
+        parts = path.split('/')
+        filename = parts[-1]
+        
+        # Determine type
+        model_type = None
+        
+        # A. Check if path starts with a known folder (e.g. "checkpoints/...")
+        if len(parts) > 1:
+            folder_name = parts[0].lower()
+            
+            # Map "text_encoders" -> "clip"
+            if folder_name == "text_encoders": folder_name = "clip"
+            elif folder_name == "diffusion_models": folder_name = "unet"
+            
+            if folder_name in MODEL_DIRS:
+                model_type = MODEL_DIRS[folder_name] # e.g. "checkpoints"
+        
+        # B. Fallback: Detect by filename
+        if not model_type:
+            model_type = detect_model_type(filename)
+            
+        if model_type:
+            if model_type not in models:
+                models[model_type] = {}
+            # We store just the filename mapping because that's what the workflow uses
+            # logic: if multiple files have same name, last one wins (warning?)
+            models[model_type][filename] = file_id
+            
+    return models
 
 def scan_gdrive_custom_nodes(folder_id):
     """

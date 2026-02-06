@@ -51,7 +51,16 @@ Link: https://drive.google.com/drive/folders/1MoYmMMAf5gpYOEuYNrem4bQjXLqj6VY9
 python vastai_runner.py --workflow meu_fluxo.json
 ```
 
-## 📖 Comandos
+---
+
+## � Sincronização Automática (Novo!)
+
+O sistema agora possui um "Sync Automático".
+Toda vez que o Container do Coolify reiniciar (Deploy), ele **lê seu Google Drive** e cria "arquivos fantasmas" na pasta de modelos.
+
+Isso serve para que **os nomes dos seus modelos apareçam nos menus do ComfyUI**, mesmo sem ter baixado os arquivos de 10GB.
+
+Isso é automático. Basta ter a variável `GDRIVE_FOLDER_ID` configurada.
 
 ```bash
 # Rodar workflow
