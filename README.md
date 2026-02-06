@@ -45,11 +45,38 @@ Link: https://drive.google.com/drive/folders/1MoYmNNAf7gpYOEuYNrem4bQjXLqj6VY9
                                           Este é o FOLDER_ID
 ```
 
+### 🛠️ Configuração Inicial
+
+#### **Windows**
+1. Clique duas vezes em `setup.bat`.
+2. Digite sua API Key da Vast.ai quando pedir.
+
+#### **Mac / Linux (VPS)**
+1. Abra o Terminal na pasta.
+2. Rode:
+   ```bash
+   chmod +x setup.sh
+   ./setup.sh
+   ```
+3. Digite sua API Key quando pedir.
+
+> **Nota:** O script cria um ambiente virtual (`.venv`) automaticamente para não conflitar com seu sistema.
+
+---
+
 ### 3. Execute
 
+**No Windows:**
 ```bash
-python vastai_runner.py --workflow meu_fluxo.json
+python vastai_runner.py --workflow examples/simple_txt2img.json
 ```
+
+**No Mac / Linux:**
+```bash
+./run.sh --workflow examples/simple_txt2img.json
+```
+
+_(O `run.sh` é um atalho criado automaticamente pelo setup que já usa o ambiente virtual)_
 
 ---
 
