@@ -1,6 +1,10 @@
-# ComfyUI Híbrido: Coolify + Vast.ai + Google Drive
+# ComfyUI Launcher (Hybrid Edition) 🚀
 
-**Simples:** Coloque modelos no Google Drive → Execute workflows → Pronto.
+**Rode ComfyUI no seu PC ou na Nuvem, tudo no mesmo lugar.**
+
+*   🖥️ **Modo Local:** Inicie seu ComfyUI instalado no PC.
+*   ☁️ **Modo Nuvem:** Alugue GPUs (RTX 4090, A100) na Vast.ai.
+*   💰 **Controle de Custos:** Defina preço máximo por hora.
 
 ## 🚀 Como Funciona
 

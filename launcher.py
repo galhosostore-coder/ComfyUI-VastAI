@@ -1,13 +1,14 @@
 import flet as ft
 import threading
 import time
+import os
 from runner_interface import VastRunnerInterface
 
 def main(page: ft.Page):
-    page.title = "ComfyUI-VastAI Launcher"
+    page.title = "ComfyUI-VastAI Launcher (Hybrid Edition)"
     page.theme_mode = "dark"
     page.window_width = 800
-    page.window_height = 600
+    page.window_height = 650
     page.padding = 20
     
     runner = VastRunnerInterface()
@@ -23,75 +24,134 @@ def main(page: ft.Page):
         except:
             pass
 
-    def update_buttons(running):
-        if running:
-            # Running State
-            status_text.value = "Running"
+    def update_buttons(mode="offline"):
+        # Modes: "offline", "cloud_running", "local_running"
+        
+        # Reset all by default
+        btn_start_cloud.disabled = False
+        btn_start_cloud.style = ft.ButtonStyle(bgcolor="blue", color="white")
+        
+        btn_stop_cloud.disabled = True
+        btn_stop_cloud.style = ft.ButtonStyle(bgcolor="grey", color="#aaaaaa")
+        
+        btn_start_local.disabled = False
+        btn_start_local.style = ft.ButtonStyle(bgcolor="teal", color="white")
+        
+        btn_open.disabled = True
+        btn_open.style = ft.ButtonStyle(bgcolor="grey", color="#aaaaaa")
+        
+        if mode == "cloud_running":
+            status_text.value = "Cloud Running"
             status_text.color = "green"
             
-            btn_start.disabled = True
-            btn_start.style = ft.ButtonStyle(bgcolor="grey", color="white")
+            btn_start_cloud.disabled = True
+            btn_start_cloud.style = ft.ButtonStyle(bgcolor="grey", color="white")
             
-            btn_stop.disabled = False
-            btn_stop.style = ft.ButtonStyle(bgcolor="red", color="white")
+            btn_stop_cloud.disabled = False
+            btn_stop_cloud.style = ft.ButtonStyle(bgcolor="red", color="white")
+            
+            btn_start_local.disabled = True # Prevent running both? Or allow? Let's prevent to avoid port conflicts if 8188 default.
+            btn_start_local.style = ft.ButtonStyle(bgcolor="grey", color="#aaaaaa")
             
             btn_open.disabled = False
             btn_open.style = ft.ButtonStyle(bgcolor="green", color="white")
-        else:
-            # Offline State
+            
+        elif mode == "local_running":
+            status_text.value = "Local Running"
+            status_text.color = "lightgreen"
+            
+            btn_start_local.disabled = True
+            btn_start_local.style = ft.ButtonStyle(bgcolor="grey", color="white")
+            
+            # Can we stop local? We didn't implement stop_local yet in runner (subprocess object exists).
+            # For now, just disable start buttons. User stops local by closing window manually usually, 
+            # but we should probably add stop local eventually.
+            
+            btn_open.disabled = False
+            btn_open.style = ft.ButtonStyle(bgcolor="green", color="white")
+
+        elif mode == "offline":
             status_text.value = "Offline"
             status_text.color = "grey"
             
-            btn_start.disabled = False
-            btn_start.style = ft.ButtonStyle(bgcolor="blue", color="white")
-            
-            btn_stop.disabled = True
-            btn_stop.style = ft.ButtonStyle(bgcolor="grey", color="#aaaaaa")
-            
-            btn_open.disabled = True
-            btn_open.style = ft.ButtonStyle(bgcolor="grey", color="#aaaaaa")
-        
         page.update()
 
     # --- Actions ---
-    def start_click(e):
+    def start_cloud_click(e):
         api_key = api_key_input.value
         gdrive_id = gdrive_input.value
         gpu = gpu_input.value
         price = price_input.value
+        local_path = local_path_input.value
         
         if not api_key or not gdrive_id:
-            log("❌ Error: API Key and GDrive ID required in Settings tab.")
+            log("❌ Error: API Key and GDrive ID required for Cloud.")
             return
 
-        runner.set_config(api_key, gdrive_id, gpu, price)
+        runner.set_config(api_key, gdrive_id, gpu, price, local_path)
         
-        status_text.value = "Starting..."
+        status_text.value = "Cloud Starting..."
         status_text.color = "orange"
-        btn_start.disabled = True
-        btn_start.style = ft.ButtonStyle(bgcolor="grey")
+        btn_start_cloud.disabled = True
+        btn_start_cloud.style = ft.ButtonStyle(bgcolor="grey")
         page.update()
         
         def run_thread():
-            log("🚀 Launching sequence initiated...")
+            log("🚀 Cloud Launch Sequence initiated...")
             success = runner.start_instance(log_callback=log)
             if success:
-                update_buttons(True)
+                update_buttons("cloud_running")
             else:
-                update_buttons(False)
-                status_text.value = "Failed"
+                update_buttons("offline")
+                status_text.value = "Cloud Failed"
                 status_text.color = "red"
                 page.update()
 
         threading.Thread(target=run_thread, daemon=True).start()
 
-    def stop_click(e):
-        log("🛑 Stopping instance...")
+    def start_local_click(e):
+        local_path = local_path_input.value
+        if not local_path:
+             log("❌ Error: Please set 'Local ComfyUI Path' in Settings.")
+             return
+             
+        # Save config
+        runner.save_config(api_key_input.value, gdrive_input.value, gpu_input.value, price_input.value, local_path)
+
+        status_text.value = "Local Starting..."
+        status_text.color = "orange"
+        btn_start_local.disabled = True
+        btn_start_local.style = ft.ButtonStyle(bgcolor="grey")
+        page.update()
+        
+        def run_thread():
+            log(f"🏠 Launching Local ComfyUI from: {local_path}")
+            success = runner.start_local(local_path, log_callback=log)
+            if success:
+                update_buttons("local_running")
+                # Wait a bit then open
+                time.sleep(3)
+                log("🌐 Opening Localhost...")
+                page.launch_url("http://127.0.0.1:8188") 
+            else:
+                update_buttons("offline")
+                status_text.value = "Local Failed"
+                status_text.color = "red"
+                page.update()
+
+        threading.Thread(target=run_thread, daemon=True).start()
+
+    def stop_cloud_click(e):
+        log("🛑 Stopping Cloud instance...")
         runner.stop_all(log_callback=log)
-        update_buttons(False)
+        update_buttons("offline")
 
     def open_click(e):
-        url = runner.get_current_url()
+        # Determine URL based on status
+        if "Local" in status_text.value:
+            url = "http://127.0.0.1:8188"
+        else:
+            url = runner.get_current_url()
         log(f"🌐 Opening: {url}")
         page.launch_url(url)
 
@@ -102,9 +162,10 @@ def main(page: ft.Page):
     # --- UI Elements: Settings ---
     api_key_input = ft.TextField(label="Vast.ai API Key", password=True, can_reveal_password=True, border_color="blue")
     gdrive_input = ft.TextField(label="Google Drive Folder ID", border_color="blue")
+    local_path_input = ft.TextField(label="Local ComfyUI Path (e.g. run_nvidia_gpu.bat)", border_color="teal", hint_text="C:\\Path\\To\\ComfyUI\\run_nvidia_gpu.bat")
     
     gpu_input = ft.Dropdown(
-        label="GPU Model",
+        label="Cloud GPU Model",
         options=[
             ft.dropdown.Option("RTX_3090"),
             ft.dropdown.Option("RTX_4090"),
@@ -133,23 +194,30 @@ def main(page: ft.Page):
     gdrive_input.value = cfg.get("gdrive_id", "")
     price_input.value = str(cfg.get("price", "0.5"))
     gpu_input.value = cfg.get("gpu", "RTX_3090")
+    local_path_input.value = cfg.get("local_path", "")
     
-    btn_save = ft.FilledButton("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value, gpu_input.value, price_input.value))
+    btn_save = ft.FilledButton("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value, gpu_input.value, price_input.value, local_path_input.value))
 
     settings_view = ft.Column([
         ft.Text("Configuration", size=24, weight="bold"),
         ft.Divider(),
+        ft.Text("Cloud Settings (Vast.ai)", color="blue", weight="bold"),
         api_key_input,
         gdrive_input,
         ft.Row([gpu_input, price_input], spacing=20),
+        ft.Divider(),
+        ft.Text("Local Settings (PC)", color="teal", weight="bold"),
+        local_path_input,
         ft.Container(height=20),
         btn_save
-    ], spacing=10)
+    ], spacing=10, scroll="auto")
 
     # --- UI Elements: Dashboard ---
-    # Init buttons with simpler styles first, then correct them via update_buttons or manual style
-    btn_start = ft.FilledButton("Start Instance", icon=ft.Icons.ROCKET_LAUNCH, on_click=start_click, style=ft.ButtonStyle(bgcolor="blue", color="white"))
-    btn_stop = ft.FilledButton("Stop Instance", icon=ft.Icons.STOP, on_click=stop_click, style=ft.ButtonStyle(bgcolor="grey", color="#aaaaaa"), disabled=True)
+    btn_start_cloud = ft.FilledButton("Start Cloud GPU", icon=ft.Icons.CLOUD, on_click=start_cloud_click, style=ft.ButtonStyle(bgcolor="blue", color="white"))
+    btn_stop_cloud = ft.FilledButton("Stop Cloud", icon=ft.Icons.STOP, on_click=stop_cloud_click, style=ft.ButtonStyle(bgcolor="grey", color="#aaaaaa"), disabled=True)
+    
+    btn_start_local = ft.FilledButton("Start Local PC", icon=ft.Icons.COMPUTER, on_click=start_local_click, style=ft.ButtonStyle(bgcolor="teal", color="white"))
+    
     btn_open = ft.FilledButton("Open ComfyUI", icon=ft.Icons.OPEN_IN_BROWSER, on_click=open_click, style=ft.ButtonStyle(bgcolor="grey", color="#aaaaaa"), disabled=True)
     btn_sync = ft.OutlinedButton("Sync Models", icon=ft.Icons.SYNC, on_click=sync_click)
 
@@ -159,7 +227,13 @@ def main(page: ft.Page):
             status_text
         ]),
         ft.Divider(),
-        ft.Row([btn_start, btn_stop], alignment="center", spacing=20),
+        ft.Text("Cloud Operations", color="blue"),
+        ft.Row([btn_start_cloud, btn_stop_cloud], alignment="start", spacing=20),
+        ft.Container(height=10),
+        ft.Text("Local Operations", color="teal"),
+        ft.Row([btn_start_local], alignment="start", spacing=20),
+        ft.Container(height=10),
+        ft.Divider(),
         ft.Row([btn_open, btn_sync], alignment="center", spacing=20),
         ft.Divider(),
         ft.Text("Console Output:", size=14, color="grey"),
@@ -175,16 +249,6 @@ def main(page: ft.Page):
 
     # --- Manual Tab System ---
     content_area = ft.Container(content=dashboard_view, expand=True, padding=10)
-    
-    # Define buttons first (references needed for switch_tab)
-    # But wait, python scoping. 
-    # We need to define switch_tab to use the button references?
-    # Or define buttons, then define switch tab, then assign on_click?
-    # Actually, inside switch_tab we can refer to tab_dash defined later if it's in local scope? No.
-    # We must define references or use e.control.data.
-    
-    # Better: Use a class or helper, or just use `page.update()` on the whole row if we reconstruct it?
-    # Efficient way:
     
     tab_dash = ft.TextButton(
         "Dashboard", 
@@ -202,8 +266,6 @@ def main(page: ft.Page):
 
     def switch_tab(e):
         clicked = e.control.data
-        
-        # Update styles
         if clicked == "dash":
             tab_dash.style = ft.ButtonStyle(color="white", bgcolor="#333333")
             tab_settings.style = ft.ButtonStyle(color="grey", bgcolor="transparent")
@@ -212,10 +274,8 @@ def main(page: ft.Page):
             tab_dash.style = ft.ButtonStyle(color="grey", bgcolor="transparent")
             tab_settings.style = ft.ButtonStyle(color="white", bgcolor="#333333")
             content_area.content = settings_view
-            
         page.update()
 
-    # Link events
     tab_dash.on_click = switch_tab
     tab_settings.on_click = switch_tab
 
@@ -226,7 +286,6 @@ def main(page: ft.Page):
         border_radius=5
     )
 
-    # Main Layout
     page.add(
         ft.Column([
             header,

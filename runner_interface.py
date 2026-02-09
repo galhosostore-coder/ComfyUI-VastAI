@@ -24,20 +24,21 @@ class VastRunnerInterface:
                 pass
         return {}
 
-    def save_config(self, api_key, gdrive_id, gpu="RTX_3090", price="0.5"):
+    def save_config(self, api_key, gdrive_id, gpu="RTX_3090", price="0.5", local_path=""):
         cfg = {
             "api_key": api_key,
             "gdrive_id": gdrive_id,
             "gpu": gpu,
-            "price": price
+            "price": price,
+            "local_path": local_path
         }
         with open(CONFIG_FILE, 'w') as f:
             json.dump(cfg, f)
         self.config = cfg
         print("Config saved.")
 
-    def set_config(self, api_key, gdrive_id, gpu, price):
-        self.save_config(api_key, gdrive_id, gpu, price)
+    def set_config(self, api_key, gdrive_id, gpu, price, local_path):
+        self.save_config(api_key, gdrive_id, gpu, price, local_path)
         # Set Env vars for subprocesses
         os.environ["VAST_API_KEY"] = api_key
         os.environ["GDRIVE_FOLDER_ID"] = gdrive_id
@@ -45,13 +46,49 @@ class VastRunnerInterface:
         os.environ["VAST_PRICE"] = str(price)
         
         # Configure Vast CLI
-        subprocess.run(["vastai", "set", "api-key", api_key], shell=True)
+        if api_key:
+            subprocess.run(["vastai", "set", "api-key", api_key], shell=True)
 
     def log(self, msg, callback):
         if callback:
             callback(msg)
         else:
             print(msg)
+
+    def start_local(self, local_path, log_callback=None):
+        if not os.path.exists(local_path):
+            self.log(f"❌ Error: Local path not found: {local_path}", log_callback)
+            return False
+            
+        self.log(f"🏠 Starting Local ComfyUI: {local_path}", log_callback)
+        
+        try:
+            working_dir = os.path.dirname(local_path)
+            
+            # Use Shell=True to run batch files properly
+            self.process = subprocess.Popen(
+                f'"{local_path}"', 
+                shell=True,
+                cwd=working_dir,
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            time.sleep(2)
+            if self.process.poll() is not None:
+                    self.log(f"❌ Error: Process exited with code {self.process.returncode}", log_callback)
+                    return False
+                    
+            self.log("✅ Local ComfyUI started!", log_callback)
+            return True
+            
+        except Exception as e:
+            self.log(f"❌ Exception: {e}", log_callback)
+            return False
 
     def start_instance(self, log_callback=None):
         """Runs the run_workflow logic via subprocess to capture output."""
