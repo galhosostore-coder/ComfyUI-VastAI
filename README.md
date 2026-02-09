@@ -93,16 +93,16 @@ As pastas `output`, `input` e `custom_nodes` estarão sincronizadas com seu Wind
 
 ---
 
-### 🔄 Sincronização Automática (Novo!)
+### �️ Aplicativo Desktop (Windows)
 
-O sistema inclui um **Custom Node** chamado `ComfyUI-GDrive-Sync`.
+Agora você pode controlar tudo por um aplicativo visual!
 
-1. Adicione o node **"Google Drive Sync"** no seu workflow (categoria `VastAI`).
-2. Clique em "Sync Now" ou apenas rode o workflow.
-3. Ele força a atualização da lista de modelos do Google Drive (ignorando o cache de 1h).
-4. Novos modelos aparecem no ComfyUI sem precisar reiniciar o container!
+1. Clique duas vezes em `start_app.bat`.
+2. Configure sua API Key e Pasta do Drive na aba **Settings**.
+3. Clique em **Start Instance** na aba **Dashboard**.
+4. Acompanhe o log em tempo real. Quando estiver pronto, o botão "Open ComfyUI" ficará verde.
 
-> **Cache Inteligente:** Por padrão, o sistema faz cache da lista de arquivos por 1 hora para acelerar o boot. O botão "Sync Now" força a limpeza desse cache. modelos.
+_(Muito mais fácil que usar linha de comando!)_ modelos.
 
 Isso serve para que **os nomes dos seus modelos apareçam nos menus do ComfyUI**, mesmo sem ter baixado os arquivos de 10GB.
 
