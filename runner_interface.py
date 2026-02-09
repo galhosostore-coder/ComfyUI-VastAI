@@ -73,13 +73,19 @@ class VastRunnerInterface:
         
         self.log(f"📝 Command: {' '.join(cmd)}", log_callback)
         
+        # Prepare environment with UTF-8 enforcement
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        
         process = subprocess.Popen(
             cmd, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.PIPE,
             text=True,
+            encoding='utf-8',
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            env=env
         )
         
         instance_id = None
