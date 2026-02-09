@@ -93,10 +93,16 @@ As pastas `output`, `input` e `custom_nodes` estarão sincronizadas com seu Wind
 
 ---
 
-## � Sincronização Automática (Novo!)
+### 🔄 Sincronização Automática (Novo!)
 
-O sistema agora possui um "Sync Automático".
-Toda vez que o Container do Coolify reiniciar (Deploy), ele **lê seu Google Drive** e cria "arquivos fantasmas" na pasta de modelos.
+O sistema inclui um **Custom Node** chamado `ComfyUI-GDrive-Sync`.
+
+1. Adicione o node **"Google Drive Sync"** no seu workflow (categoria `VastAI`).
+2. Clique em "Sync Now" ou apenas rode o workflow.
+3. Ele força a atualização da lista de modelos do Google Drive (ignorando o cache de 1h).
+4. Novos modelos aparecem no ComfyUI sem precisar reiniciar o container!
+
+> **Cache Inteligente:** Por padrão, o sistema faz cache da lista de arquivos por 1 hora para acelerar o boot. O botão "Sync Now" força a limpeza desse cache. modelos.
 
 Isso serve para que **os nomes dos seus modelos apareçam nos menus do ComfyUI**, mesmo sem ter baixado os arquivos de 10GB.
 

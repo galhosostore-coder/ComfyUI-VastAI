@@ -103,12 +103,30 @@ def check_vast_cli():
         sys.exit(1)
 
 def setup_api_key():
-    """Setup Vast.ai API key from environment."""
-    api_key = get_env("VAST_API_KEY", required=True)
-    os.environ["VAST_API_KEY"] = api_key
-    subprocess.run(["vastai", "set", "api-key", api_key], 
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return api_key
+    """Setup Vast.ai API key from environment or verify existing config."""
+    api_key = get_env("VAST_API_KEY", required=False)
+    
+    if api_key:
+        # User credentials provided via Env
+        print("🔑 Setting API Key from environment...")
+        os.environ["VAST_API_KEY"] = api_key
+        subprocess.run(["vastai", "set", "api-key", api_key], 
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return api_key
+    
+    # No Env var, check if already configured
+    print("ℹ️  VAST_API_KEY not set. Checking existing CLI config...")
+    check = subprocess.run(["vastai", "show", "user", "--raw"], 
+                           capture_output=True, text=True)
+    
+    if check.returncode == 0 and "api_key" in check.stdout:
+        print("✅ Using existing Vast.ai CLI configuration.")
+        return "Using CLI Config"
+        
+    print("❌ Error: VAST_API_KEY not found and CLI is not configured.")
+    print("   Please set VAST_API_KEY in Environment or run:")
+    print("   vastai set api-key <your_key>")
+    sys.exit(1)
 
 @retry_with_backoff(retries=3, backoff_in_seconds=2)
 def run_vastai(cmd):

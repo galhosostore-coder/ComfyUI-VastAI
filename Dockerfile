@@ -61,4 +61,4 @@ EXPOSE 8188
 
 # Start Sync + ComfyUI
 # Tuned: Runs sync_models.py (if gdrive configured) before starting ComfyUI
-CMD sh -c "python sync_models.py && python main.py --listen 0.0.0.0 --port 8188 --cpu"
+CMD sh -c "python sync_models.py; python main.py --listen 0.0.0.0 --port 8188 --cpu"

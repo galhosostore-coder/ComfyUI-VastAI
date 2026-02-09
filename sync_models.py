@@ -3,6 +3,7 @@ import sys
 import subprocess
 import json
 import time
+import argparse
 
 # Standard ComfyUI model folder structure
 MODEL_MAP = {
@@ -41,21 +42,11 @@ def touch_file(path):
         except Exception as e:
             print(f"   ❌ Failed to create {path}: {e}")
 
-def list_gdrive_recursive(folder_id):
+def list_gdrive_recursive_api(folder_id):
+    """
+    Actual API or gdown call to list files.
+    """
     import gdown
-    
-    # Check cache
-    if os.path.exists(CACHE_FILE):
-        try:
-            with open(CACHE_FILE, 'r') as f:
-                cache = json.load(f)
-            if time.time() - cache.get('timestamp', 0) < CACHE_TTL and cache.get('folder_id') == folder_id:
-                print("⚡ Using cached GDrive file list.")
-                return cache.get('files', [])
-        except:
-            pass # Ignore cache errors
-            
-    # Fetch fresh
     print("cloud scanning...")
     url = f"https://drive.google.com/drive/folders/{folder_id}"
     try:
@@ -65,24 +56,39 @@ def list_gdrive_recursive(folder_id):
             if hasattr(f, 'path'):
                 clean = f.path.replace('\\', '/').lstrip('./')
                 paths.append(clean)
-        
-        # Save cache
-        try:
-            with open(CACHE_FILE, 'w') as f:
-                json.dump({
-                    'timestamp': time.time(),
-                    'folder_id': folder_id,
-                    'files': paths
-                }, f)
-        except:
-            pass
-            
         return paths
     except Exception as e:
         print(f"⚠️ Error scanning Drive: {e}")
         return []
 
+def save_cache(folder_id, files):
+    try:
+        with open(CACHE_FILE, 'w') as f:
+            json.dump({
+                'timestamp': time.time(),
+                'folder_id': folder_id,
+                'files': files
+            }, f)
+    except:
+        pass
+
+def load_cache(folder_id):
+    if not os.path.exists(CACHE_FILE):
+        return None
+    try:
+        with open(CACHE_FILE, 'r') as f:
+            cache = json.load(f)
+        if time.time() - cache.get('timestamp', 0) < CACHE_TTL and cache.get('folder_id') == folder_id:
+            return cache.get('files', [])
+    except:
+        pass
+    return None
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--force", action="store_true", help="Ignore cache and force sync")
+    args = parser.parse_args()
+
     folder_id = get_env("GDRIVE_FOLDER_ID")
     if not folder_id:
         print("⚠️ GDRIVE_FOLDER_ID not set. Skipping model sync.")
@@ -90,9 +96,27 @@ def main():
 
     install_gdown()
     
-    print(f"🔄 Syncing model list from Google Drive ({folder_id})...")
-    files = list_gdrive_recursive(folder_id)
+    files = []
     
+    # 1. Try Cache
+    if not args.force:
+        cached_files = load_cache(folder_id)
+        if cached_files is not None:
+            print("⚡ Using cached GDrive file list.")
+            files = cached_files
+            
+    # 2. Fetch if no cache or forced
+    if not files:
+        print(f"🔄 Syncing model list from Google Drive ({folder_id})...")
+        files = list_gdrive_recursive_api(folder_id)
+        if files:
+            save_cache(folder_id, files)
+    
+    # 3. Process
+    if not files:
+        print("⚠️ No files found (or scan failed).")
+        return
+
     count = 0
     for file_path in files:
         parts = file_path.split('/')
