@@ -28,12 +28,13 @@ def main(page: ft.Page):
         api_key = api_key_input.value
         gdrive_id = gdrive_input.value
         gpu = gpu_input.value
+        price = price_input.value
         
         if not api_key or not gdrive_id:
             log("❌ Error: API Key and GDrive ID required in Settings tab.")
             return
 
-        runner.set_config(api_key, gdrive_id, gpu)
+        runner.set_config(api_key, gdrive_id, gpu, price)
         
         status_text.value = "Starting..."
         status_text.color = "orange"
@@ -81,29 +82,46 @@ def main(page: ft.Page):
     # --- UI Elements: Settings ---
     api_key_input = ft.TextField(label="Vast.ai API Key", password=True, can_reveal_password=True, border_color="blue")
     gdrive_input = ft.TextField(label="Google Drive Folder ID", border_color="blue")
+    
     gpu_input = ft.Dropdown(
-        label="GPU Preference",
+        label="GPU Model",
         options=[
             ft.dropdown.Option("RTX_3090"),
             ft.dropdown.Option("RTX_4090"),
+            ft.dropdown.Option("RTX_3060"),
+            ft.dropdown.Option("A100"),
+            ft.dropdown.Option("A100_80GB"),
             ft.dropdown.Option("A6000"),
+            ft.dropdown.Option("A40"),
+            ft.dropdown.Option("T4"),
         ],
         value="RTX_3090",
-        border_color="blue"
+        border_color="blue",
+        expand=True
+    )
+    
+    price_input = ft.TextField(
+        label="Max Price ($/hr)", 
+        value="0.5", 
+        border_color="blue", 
+        expand=True,
+        keyboard_type="number"
     )
     
     cfg = runner.load_config()
     api_key_input.value = cfg.get("api_key", "")
     gdrive_input.value = cfg.get("gdrive_id", "")
+    price_input.value = str(cfg.get("price", "0.5"))
+    gpu_input.value = cfg.get("gpu", "RTX_3090")
     
-    btn_save = ft.FilledButton("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value))
+    btn_save = ft.FilledButton("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value, gpu_input.value, price_input.value))
 
     settings_view = ft.Column([
         ft.Text("Configuration", size=24, weight="bold"),
         ft.Divider(),
         api_key_input,
         gdrive_input,
-        gpu_input,
+        ft.Row([gpu_input, price_input], spacing=20),
         ft.Container(height=20),
         btn_save
     ], spacing=10)

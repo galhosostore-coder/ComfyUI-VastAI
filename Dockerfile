@@ -46,7 +46,7 @@ COPY sync_models.py /app/sync_models.py
 COPY custom_nodes/ComfyUI-GDrive-Sync /app/custom_nodes/ComfyUI-GDrive-Sync
 
 # Install ComfyUI-Manager (Standard Manager)
-RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git /app/custom_nodes/ComfyUI-Manager
+RUN git clone https://github.com/Comfy-Org/ComfyUI-Manager.git /app/custom_nodes/ComfyUI-Manager
 
 # Create storage directories
 # Tuned: Setup volumes for Coolify persistence

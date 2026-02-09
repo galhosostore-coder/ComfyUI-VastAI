@@ -24,23 +24,25 @@ class VastRunnerInterface:
                 pass
         return {}
 
-    def save_config(self, api_key, gdrive_id, gpu="RTX_3090"):
+    def save_config(self, api_key, gdrive_id, gpu="RTX_3090", price="0.5"):
         cfg = {
             "api_key": api_key,
             "gdrive_id": gdrive_id,
-            "gpu": gpu
+            "gpu": gpu,
+            "price": price
         }
         with open(CONFIG_FILE, 'w') as f:
             json.dump(cfg, f)
         self.config = cfg
         print("Config saved.")
 
-    def set_config(self, api_key, gdrive_id, gpu):
-        self.save_config(api_key, gdrive_id, gpu)
+    def set_config(self, api_key, gdrive_id, gpu, price):
+        self.save_config(api_key, gdrive_id, gpu, price)
         # Set Env vars for subprocesses
         os.environ["VAST_API_KEY"] = api_key
         os.environ["GDRIVE_FOLDER_ID"] = gdrive_id
         os.environ["VAST_GPU"] = gpu
+        os.environ["VAST_PRICE"] = str(price)
         
         # Configure Vast CLI
         subprocess.run(["vastai", "set", "api-key", api_key], shell=True)
