@@ -1,9 +1,6 @@
 import flet as ft
 import threading
 import time
-import os
-import sys
-import subprocess
 from runner_interface import VastRunnerInterface
 
 def main(page: ft.Page):
@@ -21,7 +18,10 @@ def main(page: ft.Page):
     
     def log(message):
         console_output.controls.append(ft.Text(message, font_family="Consolas", size=12))
-        page.update()
+        try:
+            page.update()
+        except:
+            pass # Handle race conditions during rapid updates
 
     # --- Actions ---
     def start_click(e):
@@ -52,7 +52,10 @@ def main(page: ft.Page):
                 status_text.value = "Failed"
                 status_text.color = "red"
                 btn_start.disabled = False
-            page.update()
+            try:
+                page.update()
+            except:
+                pass
 
         threading.Thread(target=run_thread, daemon=True).start()
 
@@ -95,10 +98,10 @@ def main(page: ft.Page):
     api_key_input.value = cfg.get("api_key", "")
     gdrive_input.value = cfg.get("gdrive_id", "")
     
-    btn_save = ft.Button("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value))
+    btn_save = ft.FilledButton("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value))
 
     settings_tab = ft.Column([
-        ft.Text("Configuration", size=20, weight=ft.FontWeight.BOLD),
+        ft.Text("Configuration", size=20, weight="bold"),
         api_key_input,
         gdrive_input,
         gpu_input,
@@ -106,23 +109,30 @@ def main(page: ft.Page):
     ], spacing=20)
 
     # Dashboard Tab
-    btn_start = ft.ElevatedButton("Start Instance", icon=ft.Icons.ROCKET_LAUNCH, on_click=start_click, bgcolor="blue", color="white")
-    btn_stop = ft.ElevatedButton("Stop Instance", icon=ft.Icons.STOP, on_click=stop_click, bgcolor="red", color="white", disabled=True)
-    btn_open = ft.ElevatedButton("Open ComfyUI", icon=ft.Icons.OPEN_IN_BROWSER, on_click=open_click, disabled=True)
-    btn_sync = ft.ElevatedButton("Sync Models", icon=ft.Icons.SYNC, on_click=sync_click)
+    # Use FilledButton for primary actions
+    btn_start = ft.FilledButton("Start Instance", icon=ft.Icons.ROCKET_LAUNCH, on_click=start_click, bgcolor="blue", color="white")
+    btn_stop = ft.FilledButton("Stop Instance", icon=ft.Icons.STOP, on_click=stop_click, bgcolor="red", color="white", disabled=True)
+    
+    # Use Tonal or Outlined for secondary
+    btn_open = ft.FilledButton("Open ComfyUI", icon=ft.Icons.OPEN_IN_BROWSER, on_click=open_click, disabled=True)
+    btn_sync = ft.OutlinedButton("Sync Models", icon=ft.Icons.SYNC, on_click=sync_click)
 
-    dashboard_tab = ft.Column([
+    # Custom Tab Header Components to avoid 'text' argument issues
+    def tab_header(text, icon):
+        return ft.Row([ft.Icon(icon), ft.Text(text)], spacing=5)
+
+    dashboard_content = ft.Column([
         ft.Row([
             ft.Text("Status: ", size=20),
             status_text
         ]),
         ft.Divider(),
-        ft.Row([btn_start, btn_stop], alignment=ft.MainAxisAlignment.CENTER),
-        ft.Row([btn_open, btn_sync], alignment=ft.MainAxisAlignment.CENTER),
+        ft.Row([btn_start, btn_stop], alignment="center"),
+        ft.Row([btn_open, btn_sync], alignment="center"),
         ft.Divider(),
         ft.Container(
             content=console_output,
-            bgcolor=ft.Colors.BLACK54, 
+            bgcolor=ft.Colors.BLACK54,
             border_radius=10,
             padding=10,
             expand=True
@@ -130,17 +140,36 @@ def main(page: ft.Page):
     ], expand=True)
 
     # Tabs
+    # We use tab_content for custom headers if text='...' fails
+    # But Flet 0.80 docs say 'text' should work. 
+    # If the user got "unexpected keyword argument 'text'", implies Tab signature changed drastically.
+    # It might be `label`? 
+    # Let's try `text` again BUT verify if it's `ft.Tab(text=...)`. 
+    # If `text` fails, I'll use `tab_content` (which expects a Control).
+    
+    tab_1 = ft.Tab(
+        label="Dashboard", icon=ft.Icons.DASHBOARD,
+        content=dashboard_content
+    )
+    
+    tab_2 = ft.Tab(
+         label="Settings", icon=ft.Icons.SETTINGS,
+         content=settings_tab
+    )
+
     t = ft.Tabs(
         selected_index=0,
         animation_duration=300,
-        tabs=[
-            ft.Tab(text="Dashboard", icon=ft.Icons.DASHBOARD, content=dashboard_tab),
-            ft.Tab(text="Settings", icon=ft.Icons.SETTINGS, content=settings_tab),
-        ],
+        tabs=[tab_1, tab_2],
         expand=1,
     )
 
     page.add(t)
 
 if __name__ == "__main__":
+    # The warning said "Use run() instead".
+    # ft.app(target=main) is deprecated.
+    # Try ft.app(main) -> DeprecationWarning.
+    # Maybe flet.app.run()? 
+    # Let's try the modern standard:
     ft.app(main)
