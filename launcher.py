@@ -8,7 +8,7 @@ from runner_interface import VastRunnerInterface
 
 def main(page: ft.Page):
     page.title = "ComfyUI-VastAI Launcher"
-    page.theme_mode = ft.ThemeMode.DARK
+    page.theme_mode = "dark"
     page.window_width = 800
     page.window_height = 600
     page.padding = 20
@@ -16,8 +16,8 @@ def main(page: ft.Page):
     runner = VastRunnerInterface()
     
     # --- State Variables ---
-    status_text = ft.Text("Offline", color=ft.colors.GREY)
-    console_output = ft.Column(scroll=ft.ScrollMode.ALWAYS, auto_scroll=True)
+    status_text = ft.Text("Offline", color="grey")
+    console_output = ft.Column(scroll="always", auto_scroll=True)
     
     def log(message):
         console_output.controls.append(ft.Text(message, font_family="Consolas", size=12))
@@ -36,7 +36,7 @@ def main(page: ft.Page):
         runner.set_config(api_key, gdrive_id, gpu)
         
         status_text.value = "Starting..."
-        status_text.color = ft.colors.ORANGE
+        status_text.color = "orange"
         btn_start.disabled = True
         page.update()
         
@@ -45,12 +45,12 @@ def main(page: ft.Page):
             success = runner.start_instance(log_callback=log)
             if success:
                 status_text.value = "Running"
-                status_text.color = ft.colors.GREEN
+                status_text.color = "green"
                 btn_open.disabled = False
                 btn_stop.disabled = False
             else:
                 status_text.value = "Failed"
-                status_text.color = ft.colors.RED
+                status_text.color = "red"
                 btn_start.disabled = False
             page.update()
 
@@ -60,7 +60,7 @@ def main(page: ft.Page):
         log("🛑 Stopping instance...")
         runner.stop_all(log_callback=log)
         status_text.value = "Offline"
-        status_text.color = ft.colors.GREY
+        status_text.color = "grey"
         btn_start.disabled = False
         btn_stop.disabled = True
         btn_open.disabled = True
@@ -106,10 +106,10 @@ def main(page: ft.Page):
     ], spacing=20)
 
     # Dashboard Tab
-    btn_start = ft.ElevatedButton("Start Instance", icon=ft.icons.ROCKET_LAUNCH, on_click=start_click, bgcolor=ft.colors.BLUE, color=ft.colors.WHITE)
-    btn_stop = ft.ElevatedButton("Stop Instance", icon=ft.icons.STOP, on_click=stop_click, bgcolor=ft.colors.RED, color=ft.colors.WHITE, disabled=True)
-    btn_open = ft.ElevatedButton("Open ComfyUI", icon=ft.icons.OPEN_IN_BROWSER, on_click=open_click, disabled=True)
-    btn_sync = ft.ElevatedButton("Sync Models", icon=ft.icons.SYNC, on_click=sync_click)
+    btn_start = ft.ElevatedButton("Start Instance", icon=ft.Icons.ROCKET_LAUNCH, on_click=start_click, bgcolor="blue", color="white")
+    btn_stop = ft.ElevatedButton("Stop Instance", icon=ft.Icons.STOP, on_click=stop_click, bgcolor="red", color="white", disabled=True)
+    btn_open = ft.ElevatedButton("Open ComfyUI", icon=ft.Icons.OPEN_IN_BROWSER, on_click=open_click, disabled=True)
+    btn_sync = ft.ElevatedButton("Sync Models", icon=ft.Icons.SYNC, on_click=sync_click)
 
     dashboard_tab = ft.Column([
         ft.Row([
@@ -122,7 +122,7 @@ def main(page: ft.Page):
         ft.Divider(),
         ft.Container(
             content=console_output,
-            bgcolor=ft.colors.BLACK54,
+            bgcolor=ft.Colors.BLACK54, 
             border_radius=10,
             padding=10,
             expand=True
@@ -134,8 +134,8 @@ def main(page: ft.Page):
         selected_index=0,
         animation_duration=300,
         tabs=[
-            ft.Tab(text="Dashboard", icon=ft.icons.DASHBOARD, content=dashboard_tab),
-            ft.Tab(text="Settings", icon=ft.icons.SETTINGS, content=settings_tab),
+            ft.Tab(text="Dashboard", icon=ft.Icons.DASHBOARD, content=dashboard_tab),
+            ft.Tab(text="Settings", icon=ft.Icons.SETTINGS, content=settings_tab),
         ],
         expand=1,
     )
@@ -143,4 +143,4 @@ def main(page: ft.Page):
     page.add(t)
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.app(main)
