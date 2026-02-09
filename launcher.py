@@ -23,6 +23,36 @@ def main(page: ft.Page):
         except:
             pass
 
+    def update_buttons(running):
+        if running:
+            # Running State
+            status_text.value = "Running"
+            status_text.color = "green"
+            
+            btn_start.disabled = True
+            btn_start.style = ft.ButtonStyle(bgcolor="grey", color="white")
+            
+            btn_stop.disabled = False
+            btn_stop.style = ft.ButtonStyle(bgcolor="red", color="white")
+            
+            btn_open.disabled = False
+            btn_open.style = ft.ButtonStyle(bgcolor="green", color="white")
+        else:
+            # Offline State
+            status_text.value = "Offline"
+            status_text.color = "grey"
+            
+            btn_start.disabled = False
+            btn_start.style = ft.ButtonStyle(bgcolor="blue", color="white")
+            
+            btn_stop.disabled = True
+            btn_stop.style = ft.ButtonStyle(bgcolor="grey", color="#aaaaaa")
+            
+            btn_open.disabled = True
+            btn_open.style = ft.ButtonStyle(bgcolor="grey", color="#aaaaaa")
+        
+        page.update()
+
     # --- Actions ---
     def start_click(e):
         api_key = api_key_input.value
@@ -39,36 +69,26 @@ def main(page: ft.Page):
         status_text.value = "Starting..."
         status_text.color = "orange"
         btn_start.disabled = True
+        btn_start.style = ft.ButtonStyle(bgcolor="grey")
         page.update()
         
         def run_thread():
             log("🚀 Launching sequence initiated...")
             success = runner.start_instance(log_callback=log)
             if success:
-                status_text.value = "Running"
-                status_text.color = "green"
-                btn_open.disabled = False
-                btn_stop.disabled = False
+                update_buttons(True)
             else:
+                update_buttons(False)
                 status_text.value = "Failed"
                 status_text.color = "red"
-                btn_start.disabled = False
-            try:
                 page.update()
-            except:
-                pass
 
         threading.Thread(target=run_thread, daemon=True).start()
 
     def stop_click(e):
         log("🛑 Stopping instance...")
         runner.stop_all(log_callback=log)
-        status_text.value = "Offline"
-        status_text.color = "grey"
-        btn_start.disabled = False
-        btn_stop.disabled = True
-        btn_open.disabled = True
-        page.update()
+        update_buttons(False)
 
     def open_click(e):
         url = runner.get_current_url()
@@ -127,9 +147,10 @@ def main(page: ft.Page):
     ], spacing=10)
 
     # --- UI Elements: Dashboard ---
-    btn_start = ft.FilledButton("Start Instance", icon=ft.Icons.ROCKET_LAUNCH, on_click=start_click, bgcolor="blue", color="white")
-    btn_stop = ft.FilledButton("Stop Instance", icon=ft.Icons.STOP, on_click=stop_click, bgcolor="red", color="white", disabled=True)
-    btn_open = ft.FilledButton("Open ComfyUI", icon=ft.Icons.OPEN_IN_BROWSER, on_click=open_click, disabled=True)
+    # Init buttons with simpler styles first, then correct them via update_buttons or manual style
+    btn_start = ft.FilledButton("Start Instance", icon=ft.Icons.ROCKET_LAUNCH, on_click=start_click, style=ft.ButtonStyle(bgcolor="blue", color="white"))
+    btn_stop = ft.FilledButton("Stop Instance", icon=ft.Icons.STOP, on_click=stop_click, style=ft.ButtonStyle(bgcolor="grey", color="#aaaaaa"), disabled=True)
+    btn_open = ft.FilledButton("Open ComfyUI", icon=ft.Icons.OPEN_IN_BROWSER, on_click=open_click, style=ft.ButtonStyle(bgcolor="grey", color="#aaaaaa"), disabled=True)
     btn_sync = ft.OutlinedButton("Sync Models", icon=ft.Icons.SYNC, on_click=sync_click)
 
     dashboard_view = ft.Column([
