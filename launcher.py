@@ -13,7 +13,7 @@ def main(page: ft.Page):
     runner = VastRunnerInterface()
     
     # --- State Variables ---
-    status_text = ft.Text("Offline", color="grey")
+    status_text = ft.Text("Offline", color="grey", size=16, weight="bold")
     console_output = ft.Column(scroll="always", auto_scroll=True)
     
     def log(message):
@@ -21,7 +21,7 @@ def main(page: ft.Page):
         try:
             page.update()
         except:
-            pass # Handle race conditions during rapid updates
+            pass
 
     # --- Actions ---
     def start_click(e):
@@ -78,11 +78,9 @@ def main(page: ft.Page):
         log("🔄 Syncing models...")
         runner.sync_models(log_callback=log)
 
-    # --- UI Elements ---
-    
-    # Settings Tab
-    api_key_input = ft.TextField(label="Vast.ai API Key", password=True, can_reveal_password=True)
-    gdrive_input = ft.TextField(label="Google Drive Folder ID")
+    # --- UI Elements: Settings ---
+    api_key_input = ft.TextField(label="Vast.ai API Key", password=True, can_reveal_password=True, border_color="blue")
+    gdrive_input = ft.TextField(label="Google Drive Folder ID", border_color="blue")
     gpu_input = ft.Dropdown(
         label="GPU Preference",
         options=[
@@ -90,86 +88,112 @@ def main(page: ft.Page):
             ft.dropdown.Option("RTX_4090"),
             ft.dropdown.Option("A6000"),
         ],
-        value="RTX_3090"
+        value="RTX_3090",
+        border_color="blue"
     )
     
-    # Load saved config
     cfg = runner.load_config()
     api_key_input.value = cfg.get("api_key", "")
     gdrive_input.value = cfg.get("gdrive_id", "")
     
     btn_save = ft.FilledButton("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value))
 
-    settings_tab = ft.Column([
-        ft.Text("Configuration", size=20, weight="bold"),
+    settings_view = ft.Column([
+        ft.Text("Configuration", size=24, weight="bold"),
+        ft.Divider(),
         api_key_input,
         gdrive_input,
         gpu_input,
+        ft.Container(height=20),
         btn_save
-    ], spacing=20)
+    ], spacing=10)
 
-    # Dashboard Tab
-    # Use FilledButton for primary actions
+    # --- UI Elements: Dashboard ---
     btn_start = ft.FilledButton("Start Instance", icon=ft.Icons.ROCKET_LAUNCH, on_click=start_click, bgcolor="blue", color="white")
     btn_stop = ft.FilledButton("Stop Instance", icon=ft.Icons.STOP, on_click=stop_click, bgcolor="red", color="white", disabled=True)
-    
-    # Use Tonal or Outlined for secondary
     btn_open = ft.FilledButton("Open ComfyUI", icon=ft.Icons.OPEN_IN_BROWSER, on_click=open_click, disabled=True)
     btn_sync = ft.OutlinedButton("Sync Models", icon=ft.Icons.SYNC, on_click=sync_click)
 
-    # Custom Tab Header Components to avoid 'text' argument issues
-    def tab_header(text, icon):
-        return ft.Row([ft.Icon(icon), ft.Text(text)], spacing=5)
-
-    dashboard_content = ft.Column([
+    dashboard_view = ft.Column([
         ft.Row([
             ft.Text("Status: ", size=20),
             status_text
         ]),
         ft.Divider(),
-        ft.Row([btn_start, btn_stop], alignment="center"),
-        ft.Row([btn_open, btn_sync], alignment="center"),
+        ft.Row([btn_start, btn_stop], alignment="center", spacing=20),
+        ft.Row([btn_open, btn_sync], alignment="center", spacing=20),
         ft.Divider(),
+        ft.Text("Console Output:", size=14, color="grey"),
         ft.Container(
             content=console_output,
-            bgcolor=ft.Colors.BLACK54,
+            bgcolor="#1a1a1a",
+            border=ft.border.all(1, "#333333"),
             border_radius=10,
             padding=10,
             expand=True
         )
     ], expand=True)
 
-    # Tabs
-    # We use tab_content for custom headers if text='...' fails
-    # But Flet 0.80 docs say 'text' should work. 
-    # If the user got "unexpected keyword argument 'text'", implies Tab signature changed drastically.
-    # It might be `label`? 
-    # Let's try `text` again BUT verify if it's `ft.Tab(text=...)`. 
-    # If `text` fails, I'll use `tab_content` (which expects a Control).
+    # --- Manual Tab System ---
+    content_area = ft.Container(content=dashboard_view, expand=True, padding=10)
     
-    tab_1 = ft.Tab(
-        label="Dashboard", icon=ft.Icons.DASHBOARD,
-        content=dashboard_content
+    # Define buttons first (references needed for switch_tab)
+    # But wait, python scoping. 
+    # We need to define switch_tab to use the button references?
+    # Or define buttons, then define switch tab, then assign on_click?
+    # Actually, inside switch_tab we can refer to tab_dash defined later if it's in local scope? No.
+    # We must define references or use e.control.data.
+    
+    # Better: Use a class or helper, or just use `page.update()` on the whole row if we reconstruct it?
+    # Efficient way:
+    
+    tab_dash = ft.TextButton(
+        "Dashboard", 
+        icon=ft.Icons.DASHBOARD, 
+        data="dash",
+        style=ft.ButtonStyle(color="white", bgcolor="#333333")
     )
     
-    tab_2 = ft.Tab(
-         label="Settings", icon=ft.Icons.SETTINGS,
-         content=settings_tab
+    tab_settings = ft.TextButton(
+        "Settings", 
+        icon=ft.Icons.SETTINGS, 
+        data="settings",
+        style=ft.ButtonStyle(color="grey", bgcolor="transparent")
     )
 
-    t = ft.Tabs(
-        selected_index=0,
-        animation_duration=300,
-        tabs=[tab_1, tab_2],
-        expand=1,
+    def switch_tab(e):
+        clicked = e.control.data
+        
+        # Update styles
+        if clicked == "dash":
+            tab_dash.style = ft.ButtonStyle(color="white", bgcolor="#333333")
+            tab_settings.style = ft.ButtonStyle(color="grey", bgcolor="transparent")
+            content_area.content = dashboard_view
+        else:
+            tab_dash.style = ft.ButtonStyle(color="grey", bgcolor="transparent")
+            tab_settings.style = ft.ButtonStyle(color="white", bgcolor="#333333")
+            content_area.content = settings_view
+            
+        page.update()
+
+    # Link events
+    tab_dash.on_click = switch_tab
+    tab_settings.on_click = switch_tab
+
+    header = ft.Container(
+        content=ft.Row([tab_dash, tab_settings], spacing=0),
+        bgcolor="#111111",
+        padding=5,
+        border_radius=5
     )
 
-    page.add(t)
+    # Main Layout
+    page.add(
+        ft.Column([
+            header,
+            content_area
+        ], expand=True)
+    )
 
 if __name__ == "__main__":
-    # The warning said "Use run() instead".
-    # ft.app(target=main) is deprecated.
-    # Try ft.app(main) -> DeprecationWarning.
-    # Maybe flet.app.run()? 
-    # Let's try the modern standard:
     ft.app(main)

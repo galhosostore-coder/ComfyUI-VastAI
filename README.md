@@ -102,7 +102,9 @@ Agora você pode controlar tudo por um aplicativo visual!
 3. Clique em **Start Instance** na aba **Dashboard**.
 4. Acompanhe o log em tempo real. Quando estiver pronto, o botão "Open ComfyUI" ficará verde.
 
-_(Muito mais fácil que usar linha de comando!)_ modelos.
+_(Muito mais fácil que usar linha de comando!)_
+
+> **Nota:** O launcher é compatível com Flet 0.80+ (usamos abas customizadas para maior estabilidade). Se tiver erros, rode `pip install flet --upgrade`. modelos.
 
 Isso serve para que **os nomes dos seus modelos apareçam nos menus do ComfyUI**, mesmo sem ter baixado os arquivos de 10GB.
 
