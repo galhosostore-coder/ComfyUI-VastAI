@@ -165,7 +165,7 @@ def main(page: ft.Page):
     api_key_input = ft.TextField(label="Vast.ai API Key", password=True, can_reveal_password=True, border_color="blue")
     gdrive_input = ft.TextField(label="Google Drive Folder ID", border_color="blue")
     local_path_input = ft.TextField(label="Local ComfyUI Path (e.g. run_nvidia_gpu.bat)", border_color="teal", hint_text="A:\\ComfyUI_windows_portable\\run_nvidia_gpu.bat")
-    drive_models_input = ft.TextField(label="Drive Models Path (synced folder)", border_color="orange", hint_text="G:\\Meu Drive\\ComfyUI\\models")
+    drive_models_input = ft.TextField(label="Drive Models Path (synced folder)", border_color="orange", hint_text="G:\\Meu Drive\\Programas\\ConfyUI-VastIA\\VastAI_Models")
     
     gpu_input = ft.Dropdown(
         label="Cloud GPU Model",

@@ -256,36 +256,24 @@ def scan_gdrive_custom_nodes(folder_id):
             return file_id
     return None
 
-def build_download_script(required_models, gdrive_models, custom_nodes_id=None):
-    """Build script to download models and install nodes."""
+def build_download_script(required_models, gdrive_models, custom_nodes_id=None, folder_id=None):
+    """
+    Build startup script for the Vast.ai container.
+    
+    NEW (v1.4): Uses lazy loading instead of downloading all models upfront.
+    - Installs gdown
+    - Downloads lazy_model_loader.py from the project repo
+    - Creates stub files for all models (0 bytes, instant)
+    - Starts ComfyUI with model watcher (downloads on-demand)
+    """
     commands = [
-        "pip install -q gdown",
-        "apt-get update && apt-get install -y git" # Ensure git is there
+        "pip install -q gdown requests",
+        "apt-get update && apt-get install -y git"
     ]
     
-    # 1. Models
-    for model_type, filenames in required_models.items():
-        gdrive_files = gdrive_models.get(model_type, {})
-        dest_dir = f"{MODELS_PATH}/{MODEL_DIRS.get(model_type, model_type)}"
-        
-        for filename in filenames:
-            if filename in gdrive_files:
-                file_id = gdrive_files[filename]
-                commands.append(f"mkdir -p {dest_dir}")
-                # Use -O with explicit filename to handle messy GDrive names
-                commands.append(f"gdown -q --id {file_id} -O '{dest_dir}/{filename}'")
-                print(f"   📥 Model: {model_type}/{filename}")
-
-    # 2. Custom Nodes (from custom_nodes.txt)
+    # 1. Custom Nodes (from custom_nodes.txt) - still do this eagerly since nodes are small
     if custom_nodes_id:
         print(f"   🔧 Found custom_nodes.txt! Adding installation commands...")
-        # Download the file to a temp location, read it, then append git clones
-        # Note: We can't easily read it locally if we only have the ID and are avoiding auth.
-        # Strategy: We tell the remote machine to download it, then iterate through it.
-        # But bash scripting that is complex in a one-liner.
-        # Better: We download it LOCALLY now (machine running the runner), parse it, 
-        # and generate the explicit git clone commands for the remote.
-        
         try:
             import gdown
             url = f"https://drive.google.com/uc?id={custom_nodes_id}"
@@ -306,14 +294,17 @@ def build_download_script(required_models, gdrive_models, custom_nodes_id=None):
         except Exception as e:
             print(f"⚠️ Failed to process custom_nodes.txt locally: {e}")
 
-    # 3. Start ComfyUI (Background)
-    # We use nohup or just run it. Since this is --onstart-cmd, 
-    # it runs effectively in the background of the 'startup' phase but needs to block?
-    # VastAI onstart usually runs in a screen or background. 
-    # We just run python directly.
-    # We use semicolon to ensure ComfyUI starts even if some downloads fail
-    # This is critical for resilience.
-    commands.append(f"cd {COMFYUI_PATH} && python main.py --listen 0.0.0.0 --port 8188")
+    # 2. Download lazy_model_loader.py from our GitHub repo
+    loader_url = "https://raw.githubusercontent.com/galhosostore-coder/ComfyUI-VastAI/main/lazy_model_loader.py"
+    commands.append(f"cd {COMFYUI_PATH} && curl -sL '{loader_url}' -o lazy_model_loader.py")
+    
+    # 3. Run lazy loader (creates stubs + starts ComfyUI + watches for prompts)
+    if folder_id:
+        commands.append(f"cd {COMFYUI_PATH} && python lazy_model_loader.py {folder_id}")
+    else:
+        # Fallback: just start ComfyUI without lazy loading
+        print("   ⚠️ No GDrive folder ID, falling back to direct ComfyUI start")
+        commands.append(f"cd {COMFYUI_PATH} && python main.py --listen 0.0.0.0 --port 8188")
     
     return "; ".join(commands)
 
@@ -548,9 +539,9 @@ def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
         gdrive_models = scan_gdrive_models(folder_id)
         custom_nodes_id = scan_gdrive_custom_nodes(folder_id)
     
-    # Build download script
-    print("\n📥 Preparing startup script...")
-    startup_script = build_download_script(required, gdrive_models, custom_nodes_id)
+    # Build startup script (v1.4: lazy loading - stubs + on-demand download)
+    print("\n📥 Preparing lazy-load startup script...")
+    startup_script = build_download_script(required, gdrive_models, custom_nodes_id, folder_id=folder_id)
     
     # Load workflow
     with open(workflow_path, 'r', encoding='utf-8') as f:
