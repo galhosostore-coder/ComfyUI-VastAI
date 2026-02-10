@@ -195,12 +195,89 @@ class VastRunnerInterface:
             return False
 
     def stop_all(self, log_callback=None):
-        self.log("🛑 Sending stop command...", log_callback)
+        """Stop cloud instance. First tries to retrieve any new models."""
+        self.log("🛑 Preparing to stop cloud...", log_callback)
+        
+        # Step 1: Try to retrieve new models before destroying
+        self.retrieve_new_models(log_callback)
+        
+        # Step 2: Destroy instance
+        self.log("💀 Destroying cloud instance...", log_callback)
         cmd = ["python", "vastai_runner.py", "--stop"]
         result = subprocess.run(cmd, capture_output=True, text=True)
         self.log(result.stdout, log_callback)
         if result.stderr:
              self.log(f"Errors: {result.stderr}", log_callback)
+        self.current_instance_id = None
+        self.current_ip = None
+
+    def retrieve_new_models(self, log_callback=None):
+        """
+        Before destroying, check if the cloud instance has new models
+        that were downloaded during the session (e.g. via ComfyUI Manager).
+        If found, SCP them back to the local VastAI_Models folder.
+        """
+        if not self.current_instance_id:
+            return
+        
+        drive_models = self.config.get("drive_models_path", "")
+        if not drive_models:
+            self.log("⚠️ Drive Models Path not set, skipping new model retrieval.", log_callback)
+            return
+        
+        self.log("📋 Checking for new models on cloud...", log_callback)
+        
+        try:
+            # Read the manifest from the cloud instance
+            manifest_cmd = [
+                "vastai", "execute", str(self.current_instance_id),
+                "cat /app/new_models_manifest.json 2>/dev/null || echo '[]'"
+            ]
+            result = subprocess.run(manifest_cmd, capture_output=True, text=True, shell=True)
+            
+            if result.returncode == 0 and result.stdout.strip():
+                try:
+                    manifest = json.loads(result.stdout.strip())
+                except:
+                    manifest = []
+                
+                if not manifest:
+                    self.log("✅ No new models to retrieve.", log_callback)
+                    return
+                
+                self.log(f"🆕 Found {len(manifest)} new model(s)! Downloading...", log_callback)
+                
+                for model in manifest:
+                    rel_path = model.get("relative_path", "")
+                    full_path = model.get("full_path", "")
+                    size_mb = model.get("size_mb", 0)
+                    
+                    if not rel_path or not full_path:
+                        continue
+                    
+                    local_dest = os.path.join(drive_models, rel_path)
+                    os.makedirs(os.path.dirname(local_dest), exist_ok=True)
+                    
+                    self.log(f"  ⬇️  {rel_path} ({size_mb}MB)...", log_callback)
+                    
+                    scp_cmd = [
+                        "vastai", "scp", 
+                        f"{self.current_instance_id}:{full_path}",
+                        local_dest
+                    ]
+                    scp_result = subprocess.run(scp_cmd, capture_output=True, text=True, shell=True)
+                    
+                    if scp_result.returncode == 0:
+                        self.log(f"  ✅ Saved: {rel_path}", log_callback)
+                    else:
+                        self.log(f"  ❌ Failed: {scp_result.stderr}", log_callback)
+                
+                self.log(f"📦 {len(manifest)} model(s) synced back to Drive!", log_callback)
+            else:
+                self.log("✅ No new models to retrieve.", log_callback)
+                
+        except Exception as e:
+            self.log(f"⚠️ Could not check for new models: {e}", log_callback)
 
     def get_current_url(self):
         # Fallback: query vastai if we don't have it in memory
@@ -224,13 +301,3 @@ class VastRunnerInterface:
             pass
         return "http://localhost:8188" # Fallback
 
-    def sync_models(self, log_callback=None):
-        self.log("🔄 Triggering manual model sync...", log_callback)
-        # This one is tricky if we are on local Windows and want to sync GDrive? 
-        # Actually vastai_runner only runs sync inside the container. 
-        # The user presumably wants to sync the REMOTE instance.
-        # But we can't easily run a command inside the remote instance from here unless we use ssh.
-        # OR we just rely on "Sync Now" button in the ComfyUI browser.
-        
-        self.log("ℹ️  To sync models, please use the 'Sync Now' button inside ComfyUI.", log_callback)
-        self.log("    (The runner syncs automatically on start).", log_callback)

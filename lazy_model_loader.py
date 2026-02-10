@@ -312,6 +312,110 @@ def resolve_stubs_for_prompt(prompt_data, stub_map):
                         print(f"[LazyLoader] Error resolving {name}: {e}")
 
 
+def setup_rclone(folder_id):
+    """
+    Configure rclone for GDrive access (no OAuth needed for public folders).
+    For uploading, we need a service account or OAuth. 
+    We'll use a simpler approach: gdown for download, and for upload we 
+    track new files and offer to download them via the local Launcher.
+    """
+    # Check if rclone is available
+    try:
+        subprocess.run(["rclone", "version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except FileNotFoundError:
+        print("[LazyLoader] Installing rclone...")
+        try:
+            subprocess.run(["curl", "-sL", "https://rclone.org/install.sh", "|", "bash"], 
+                         shell=True, check=True)
+            return True
+        except:
+            print("[LazyLoader] ⚠️  Could not install rclone. New model upload disabled.")
+            return False
+
+
+def detect_new_models(stub_map):
+    """
+    Detect NEW models in the container that weren't in the original stub map.
+    These are models downloaded during the session (e.g. via ComfyUI Manager).
+    Returns: list of (subfolder, filepath) tuples
+    """
+    new_models = []
+    
+    for subdir in MODEL_SUBDIRS:
+        dir_path = os.path.join(MODELS_PATH, subdir)
+        if not os.path.exists(dir_path):
+            continue
+            
+        for root, dirs, files in os.walk(dir_path):
+            for fname in files:
+                if fname.endswith(STUB_MARKER_EXT):
+                    continue  # Skip stub markers
+                    
+                filepath = os.path.join(root, fname)
+                stub_marker = filepath + STUB_MARKER_EXT
+                
+                # If it has a stub marker, it's a known model (downloaded from our GDrive)
+                if os.path.exists(stub_marker):
+                    continue
+                
+                # If it's 0 bytes, it's an unresolved stub
+                if os.path.getsize(filepath) == 0:
+                    continue
+                    
+                # If it's NOT in our stub_map, it's a NEW model
+                if filepath not in stub_map:
+                    rel_path = os.path.relpath(filepath, MODELS_PATH)
+                    new_models.append((subdir, filepath, rel_path))
+    
+    return new_models
+
+
+def save_new_models_manifest(new_models):
+    """
+    Save a manifest of new models that need to be synced back to Drive.
+    The local Launcher can read this via the Vast.ai API and download them.
+    """
+    manifest_path = os.path.join(COMFYUI_PATH, "new_models_manifest.json")
+    manifest = []
+    
+    for subdir, filepath, rel_path in new_models:
+        size_mb = os.path.getsize(filepath) / (1024 * 1024)
+        manifest.append({
+            "subfolder": subdir,
+            "filename": os.path.basename(filepath),
+            "relative_path": rel_path,
+            "size_mb": round(size_mb, 1),
+            "full_path": filepath
+        })
+    
+    with open(manifest_path, 'w') as f:
+        json.dump(manifest, f, indent=2)
+    
+    print(f"[LazyLoader] 📋 Saved manifest: {len(manifest)} new models")
+    return manifest_path
+
+
+def start_new_model_watcher(stub_map):
+    """
+    Background thread that periodically checks for newly downloaded models.
+    Saves a manifest so the Launcher can retrieve them before destroying.
+    """
+    print("[LazyLoader] 👁️  Starting new-model watcher...")
+    
+    while True:
+        time.sleep(30)  # Check every 30 seconds
+        try:
+            new_models = detect_new_models(stub_map)
+            if new_models:
+                save_new_models_manifest(new_models)
+                for subdir, filepath, rel_path in new_models:
+                    size = os.path.getsize(filepath) / (1024 * 1024)
+                    print(f"[LazyLoader] 🆕 New model detected: {rel_path} ({size:.0f}MB)")
+        except Exception as e:
+            pass
+
+
 def main():
     """
     Main entry point. Called as part of the container's onstart-cmd.
@@ -351,21 +455,40 @@ def main():
         cwd=COMFYUI_PATH
     )
 
-    # Step 5: Start watcher (monitors API for queued prompts)
-    print(f"\n[LazyLoader] 👁️  Starting model watcher...")
+    # Step 5: Start watchers
+    print(f"\n[LazyLoader] 👁️  Starting model watchers...")
+    
+    # Watcher 1: monitors API for queued prompts → downloads needed models
     watcher = threading.Thread(target=start_model_watcher, args=(stub_map,), daemon=True)
     watcher.start()
+    
+    # Watcher 2: detects NEW models downloaded during session
+    new_watcher = threading.Thread(target=start_new_model_watcher, args=(stub_map,), daemon=True)
+    new_watcher.start()
 
     # Step 6: Wait for ComfyUI process
-    print(f"\n[LazyLoader] ✅ System ready! Models will download on-demand.")
+    print(f"\n[LazyLoader] ✅ System ready!")
+    print(f"[LazyLoader] 📥 Models download on-demand when you Queue a workflow")
+    print(f"[LazyLoader] 🆕 New models you download will be detected automatically")
     print("=" * 60)
 
     try:
         comfyui_proc.wait()
     except KeyboardInterrupt:
         print("\n[LazyLoader] Shutting down...")
+        
+        # Before exit: check for new models
+        new_models = detect_new_models(stub_map)
+        if new_models:
+            print(f"\n[LazyLoader] ⚠️  {len(new_models)} new model(s) detected!")
+            print("[LazyLoader] These models need to be synced back to Drive.")
+            save_new_models_manifest(new_models)
+            for _, _, rel_path in new_models:
+                print(f"  - {rel_path}")
+        
         comfyui_proc.terminate()
 
 
 if __name__ == "__main__":
     main()
+
