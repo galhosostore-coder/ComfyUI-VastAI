@@ -88,7 +88,7 @@ def main(page: ft.Page):
             log("❌ Error: API Key and GDrive ID required for Cloud.")
             return
 
-        runner.set_config(api_key, gdrive_id, gpu, price, local_path)
+        runner.set_config(api_key, gdrive_id, gpu, price, local_path, drive_models_input.value)
         
         status_text.value = "Cloud Starting..."
         status_text.color = "orange"
@@ -116,7 +116,7 @@ def main(page: ft.Page):
              return
              
         # Save config
-        runner.save_config(api_key_input.value, gdrive_input.value, gpu_input.value, price_input.value, local_path)
+        runner.save_config(api_key_input.value, gdrive_input.value, gpu_input.value, price_input.value, local_path, drive_models_input.value)
 
         status_text.value = "Local Starting..."
         status_text.color = "orange"
@@ -156,13 +156,16 @@ def main(page: ft.Page):
         page.launch_url(url)
 
     def sync_click(e):
-        log("🔄 Syncing models...")
-        runner.sync_models(log_callback=log)
+        log("\ud83d\udd04 Syncing local models to Drive...")
+        def sync_thread():
+            runner.sync_to_drive(log_callback=log)
+        threading.Thread(target=sync_thread, daemon=True).start()
 
     # --- UI Elements: Settings ---
     api_key_input = ft.TextField(label="Vast.ai API Key", password=True, can_reveal_password=True, border_color="blue")
     gdrive_input = ft.TextField(label="Google Drive Folder ID", border_color="blue")
-    local_path_input = ft.TextField(label="Local ComfyUI Path (e.g. run_nvidia_gpu.bat)", border_color="teal", hint_text="C:\\Path\\To\\ComfyUI\\run_nvidia_gpu.bat")
+    local_path_input = ft.TextField(label="Local ComfyUI Path (e.g. run_nvidia_gpu.bat)", border_color="teal", hint_text="A:\\ComfyUI_windows_portable\\run_nvidia_gpu.bat")
+    drive_models_input = ft.TextField(label="Drive Models Path (synced folder)", border_color="orange", hint_text="G:\\Meu Drive\\ComfyUI\\models")
     
     gpu_input = ft.Dropdown(
         label="Cloud GPU Model",
@@ -195,8 +198,9 @@ def main(page: ft.Page):
     price_input.value = str(cfg.get("price", "0.5"))
     gpu_input.value = cfg.get("gpu", "RTX_3090")
     local_path_input.value = cfg.get("local_path", "")
+    drive_models_input.value = cfg.get("drive_models_path", "")
     
-    btn_save = ft.FilledButton("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value, gpu_input.value, price_input.value, local_path_input.value))
+    btn_save = ft.FilledButton("Save Config", on_click=lambda e: runner.save_config(api_key_input.value, gdrive_input.value, gpu_input.value, price_input.value, local_path_input.value, drive_models_input.value))
 
     settings_view = ft.Column([
         ft.Text("Configuration", size=24, weight="bold"),
@@ -208,6 +212,9 @@ def main(page: ft.Page):
         ft.Divider(),
         ft.Text("Local Settings (PC)", color="teal", weight="bold"),
         local_path_input,
+        ft.Divider(),
+        ft.Text("Sync Settings (Local \u2192 Drive \u2192 Cloud)", color="orange", weight="bold"),
+        drive_models_input,
         ft.Container(height=20),
         btn_save
     ], spacing=10, scroll="auto")

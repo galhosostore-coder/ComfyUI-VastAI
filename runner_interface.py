@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 import requests
+from sync_local_to_drive import sync_models as do_sync_models
 
 # CONFIG FILE
 CONFIG_FILE = "launcher_config.json"
@@ -24,21 +25,22 @@ class VastRunnerInterface:
                 pass
         return {}
 
-    def save_config(self, api_key, gdrive_id, gpu="RTX_3090", price="0.5", local_path=""):
+    def save_config(self, api_key, gdrive_id, gpu="RTX_3090", price="0.5", local_path="", drive_models_path=""):
         cfg = {
             "api_key": api_key,
             "gdrive_id": gdrive_id,
             "gpu": gpu,
             "price": price,
-            "local_path": local_path
+            "local_path": local_path,
+            "drive_models_path": drive_models_path
         }
         with open(CONFIG_FILE, 'w') as f:
             json.dump(cfg, f)
         self.config = cfg
         print("Config saved.")
 
-    def set_config(self, api_key, gdrive_id, gpu, price, local_path):
-        self.save_config(api_key, gdrive_id, gpu, price, local_path)
+    def set_config(self, api_key, gdrive_id, gpu, price, local_path, drive_models_path):
+        self.save_config(api_key, gdrive_id, gpu, price, local_path, drive_models_path)
         # Set Env vars for subprocesses
         os.environ["VAST_API_KEY"] = api_key
         os.environ["GDRIVE_FOLDER_ID"] = gdrive_id
@@ -48,6 +50,37 @@ class VastRunnerInterface:
         # Configure Vast CLI
         if api_key:
             subprocess.run(["vastai", "set", "api-key", api_key], shell=True)
+
+    def sync_to_drive(self, log_callback=None):
+        """Sync local models to Google Drive before cloud start."""
+        local_models = self.config.get("local_path", "")
+        drive_models = self.config.get("drive_models_path", "")
+        
+        if not local_models or not drive_models:
+            self.log("Skipping sync: Local or Drive path not configured.", log_callback)
+            return False
+        
+        # Derive local models path from the ComfyUI bat file path
+        # e.g. A:\ComfyUI_windows_portable\run_nvidia_gpu.bat -> A:\ComfyUI_windows_portable\ComfyUI\models
+        comfy_dir = os.path.dirname(local_models)
+        possible_models = os.path.join(comfy_dir, "ComfyUI", "models")
+        if not os.path.exists(possible_models):
+            # Maybe the path IS the models folder directly, or try parent
+            possible_models = os.path.join(comfy_dir, "models")
+        if not os.path.exists(possible_models):
+            self.log(f"Could not find models folder near: {local_models}", log_callback)
+            return False
+        
+        self.log(f"Syncing: {possible_models} -> {drive_models}", log_callback)
+        
+        try:
+            copied, skipped, total_bytes = do_sync_models(possible_models, drive_models, log_callback=log_callback)
+            if copied == 0:
+                self.log("Drive is already up to date!", log_callback)
+            return True
+        except Exception as e:
+            self.log(f"Sync error: {e}", log_callback)
+            return False
 
     def log(self, msg, callback):
         if callback:
@@ -92,7 +125,12 @@ class VastRunnerInterface:
 
     def start_instance(self, log_callback=None):
         """Runs the run_workflow logic via subprocess to capture output."""
-        self.log("🚀 Initializing runner...", log_callback)
+        # Step 1: Sync models to Drive first
+        self.log("📦 Step 1/2: Syncing models to Drive...", log_callback)
+        self.sync_to_drive(log_callback=log_callback)
+        
+        # Step 2: Start cloud instance
+        self.log("🚀 Step 2/2: Initializing cloud runner...", log_callback)
         
         # We run the runner with a dummy workflow or just to start
         # Since the runner expects a workflow file, we might need a 'start only' mode or dummy.
