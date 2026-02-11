@@ -635,42 +635,53 @@ class VastRunnerInterface:
         return False
     
     def _find_working_url(self, instance_id, instance_data, timeout=300):
-        """v3.4 URL finder: Direct HTTP → Tunnel → Proxy → None.
+        """v4.1 URL finder: Instance Portal → Tunnel → Dashboard.
         
-        Re-fetches instance data every 30s so port mappings are always fresh.
+        The official template uses OPEN_BUTTON_TOKEN auth on all web services.
+        Direct port 8188 returns 401 without the token.
+        
+        Priority:
+        1. Instance Portal (port 1111) with ?token=XXX — proper entry point
+        2. Cloudflare tunnel from logs — auto-auth, valid SSL
+        3. Returns None → caller falls back to Vast.ai dashboard
         """
         start = time.time()
+        portal_url = None
         tunnel_url = None
+        token = None
         last_refresh = 0
-        direct_urls = self._build_direct_urls(instance_data)
-        proxy_url = f"https://{instance_id}-{COMFYUI_PORT}.proxy.vast.ai/"
         
-        self.log(f"Direct URLs (initial): {direct_urls}", "info")
-        self.log(f"Proxy URL (fallback): {proxy_url}", "info")
-        self.log("Polling for ComfyUI...", "info")
+        self.log("Searching for ComfyUI access URL...", "info")
         
         attempt = 0
         while time.time() - start < timeout:
             attempt += 1
             elapsed = int(time.time() - start)
             
-            # ── Refresh instance data every 30s to get fresh port mappings ──
-            if elapsed - last_refresh >= 30:
+            # ── Refresh instance data every 30s ──
+            if elapsed - last_refresh >= 30 or attempt == 1:
                 last_refresh = elapsed
-                fresh_data = self._refresh_instance_data(instance_id)
-                if fresh_data:
-                    new_urls = self._build_direct_urls(fresh_data)
-                    if new_urls != direct_urls:
-                        direct_urls = new_urls
-                        self.log(f"Updated direct URLs: {direct_urls}", "info")
+                fresh_data = self._refresh_instance_data(instance_id) or instance_data
+                
+                # Build Instance Portal URL (port 1111)
+                portal_url = self._build_portal_url(fresh_data)
+                if portal_url and not token:
+                    self.log(f"Instance Portal: {portal_url}", "info")
             
-            # ── Tier 1: Direct HTTP URLs (best — no SSL issues) ──
-            for url in direct_urls:
-                if self._check_url(url):
-                    self.log(f"✓ Direct HTTP connection live: {url}", "success")
-                    return url
+            # ── Try to get auth token from logs ──
+            if not token:
+                token = self._extract_open_token(instance_id)
+                if token:
+                    self.log(f"🔑 Got auth token: {token[:8]}...", "success")
             
-            # ── Tier 2: Look for Cloudflare tunnel in logs ──
+            # ── Tier 1: Instance Portal with token (port 1111) ──
+            if portal_url and token:
+                authenticated_url = f"{portal_url}?token={token}"
+                if self._check_url(authenticated_url):
+                    self.log("✓ Instance Portal is live!", "success")
+                    return authenticated_url
+            
+            # ── Tier 2: Cloudflare tunnel from logs (auto-auth) ──
             if not tunnel_url:
                 tunnel_url = self._extract_tunnel_url(instance_id)
                 if tunnel_url:
@@ -688,14 +699,7 @@ class VastRunnerInterface:
             
             time.sleep(5)
         
-        # Timeout — try proxy as absolute last resort
-        if self._check_url(proxy_url):
-            self.log("⚠ Only proxy URL works (browser will show SSL warning)", "warning")
-            self.log("Click 'Advanced' → 'Proceed' in the browser", "info")
-            return proxy_url
-        
-        self.log(f"Timeout ({timeout}s). No working URL found.", "error")
-        self.log(f"Tried: Direct={direct_urls}, Tunnel={tunnel_url}, Proxy={proxy_url}", "error")
+        self.log(f"Timeout ({timeout}s). No working URL found.", "warning")
         return None
     
     def _refresh_instance_data(self, instance_id):
@@ -714,13 +718,13 @@ class VastRunnerInterface:
         except Exception:
             return None
     
-    def _extract_tunnel_url(self, instance_id):
-        """v3.1: Extract tunnel/proxy URL from instance logs.
+    def _extract_open_token(self, instance_id):
+        """Extract OPEN_BUTTON_TOKEN from instance logs.
         
-        Searches for:
-        1. Cloudflare Quick Tunnels: https://xxx.trycloudflare.com
-        2. Vast.ai proxy URLs: https://xxx.vast.ai
-        3. Any HTTPS URL that looks like a ComfyUI endpoint
+        The official template prints the token at startup. Common patterns:
+        - "Token: abc123..."
+        - "OPEN_BUTTON_TOKEN=abc123"
+        - "open_button_token: abc123"
         """
         try:
             result = subprocess.run(
@@ -732,42 +736,86 @@ class VastRunnerInterface:
             
             logs = result.stdout
             
-            # v3.1: Pattern 1 - Cloudflare tunnel URLs
+            # Pattern 1: OPEN_BUTTON_TOKEN=value
+            token_match = re.search(
+                r'OPEN_BUTTON_TOKEN[=:]\s*["\']?([a-zA-Z0-9_-]{8,})["\']?', logs
+            )
+            if token_match:
+                return token_match.group(1)
+            
+            # Pattern 2: "token": "value" or token: value in JSON-like output
+            token_match = re.search(
+                r'"?token"?\s*[:=]\s*"?([a-zA-Z0-9_-]{8,})"?', logs, re.IGNORECASE
+            )
+            if token_match:
+                return token_match.group(1)
+            
+            return None
+        except Exception as e:
+            self.log(f"Token parse error: {e}", "warning")
+            return None
+    
+    def _extract_tunnel_url(self, instance_id):
+        """Extract Cloudflare tunnel URL from instance logs.
+        
+        Searches for:
+        1. Cloudflare Quick Tunnels: https://xxx.trycloudflare.com
+        2. Vast.ai proxy URLs: https://xxx.vast.ai
+        """
+        try:
+            result = subprocess.run(
+                f'vastai logs {instance_id} --raw',
+                shell=True, capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0 or not result.stdout:
+                return None
+            
+            logs = result.stdout
+            
+            # Cloudflare tunnel URLs
             tunnel_matches = re.findall(
                 r'(https://[\w-]+\.trycloudflare\.com)', logs
             )
             if tunnel_matches:
                 return tunnel_matches[-1]
             
-            # v3.1: Pattern 2 - Vast.ai proxy URLs  
+            # Vast.ai proxy URLs  
             proxy_matches = re.findall(
                 r'(https://[\w-]+\.proxy\.vast\.ai[/\w]*)', logs
             )
             if proxy_matches:
                 return proxy_matches[-1]
             
-            # v3.1: Pattern 3 - Generic vast.ai URLs with port
-            vast_matches = re.findall(
-                r'(https://[\w-]+-\d+\.vast\.ai[/\w]*)', logs
-            )
-            if vast_matches:
-                return vast_matches[-1]
-            
             return None
         except Exception as e:
             self.log(f"Log parse error: {e}", "warning")
             return None
     
+    def _build_portal_url(self, instance_data):
+        """Build Instance Portal URL from port 1111 mapping."""
+        public_ip = instance_data.get("public_ipaddr", "")
+        ports = instance_data.get("ports", {})
+        
+        if not public_ip or not ports or not isinstance(ports, dict):
+            return None
+        
+        # Look for port 1111 (Instance Portal)
+        for key in ["1111/tcp", "1111"]:
+            if key in ports:
+                port_info = ports[key]
+                if isinstance(port_info, list) and port_info:
+                    hp = port_info[0].get("HostPort", "")
+                    if hp:
+                        return f"http://{public_ip}:{hp}"
+        
+        return None
+    
     def _build_direct_urls(self, instance_data):
-        """v3.1: Build candidate URLs from instance data.
-        Includes direct IP:port and Vast.ai proxy HTTPS URLs.
-        """
+        """Build candidate ComfyUI URLs from instance data (port 8188)."""
         urls = []
         public_ip = instance_data.get("public_ipaddr", "")
         ports = instance_data.get("ports", {})
-        direct_port_start = instance_data.get("direct_port_start", 0)
         
-        # From ports dict (Docker port mapping)
         if ports and isinstance(ports, dict):
             for key in ["8188/tcp", "8188"]:
                 if key in ports:
@@ -777,31 +825,29 @@ class VastRunnerInterface:
                         if hp and public_ip:
                             urls.append(f"http://{public_ip}:{hp}")
         
-        # Raw fallback with known port (works with --direct)
         if public_ip:
             urls.append(f"http://{public_ip}:{COMFYUI_PORT}")
         
-        # Dedupe preserving order
         seen = set()
         return [u for u in urls if u not in seen and not seen.add(u)]
     
     def _check_url(self, url, timeout_sec=5):
-        """v3.1: Quick HTTP/HTTPS check — returns True if URL is alive.
-        Supports HTTPS with unverified certs (Vast.ai proxies use self-signed).
+        """Quick HTTP/HTTPS check — returns True if URL responds with 2xx/3xx.
+        
+        v4.1: 401/403 are NOT treated as 'working' — they mean auth is required.
         """
         try:
-            # v3.1: Create SSL context that doesn't verify certs for proxies
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             
             req = urllib.request.Request(url, method='GET')
-            req.add_header('User-Agent', 'ComfyUI-VastAI/3.1')
+            req.add_header('User-Agent', 'ComfyUI-VastAI/4.1')
             resp = urllib.request.urlopen(req, timeout=timeout_sec, context=ctx)
             return resp.status < 400
         except urllib.error.HTTPError as he:
-            # 401/403 = server is UP (auth blocking)
-            return he.code in (401, 403)
+            # 401/403 = auth required, NOT working
+            return False
         except Exception:
             return False
 
