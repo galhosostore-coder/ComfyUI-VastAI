@@ -468,10 +468,10 @@ class VastRunnerInterface:
                     "https://raw.githubusercontent.com/"
                     "galhosostore-coder/ComfyUI-VastAI/main/provision.sh"
                 )
-                body["env"] = (
-                    f"-e PROVISIONING_SCRIPT={provisioning_url}"
-                    f" -e GDRIVE_FOLDER_ID={gdrive_id}"
-                )
+                body["env"] = {
+                    "PROVISIONING_SCRIPT": provisioning_url,
+                    "GDRIVE_FOLDER_ID": gdrive_id,
+                }
             
             self.log(f"Using official ComfyUI template ({COMFYUI_TEMPLATE_HASH[:8]}...) ✓", "success")
             self.log(f"REST API: PUT {url}", "info")

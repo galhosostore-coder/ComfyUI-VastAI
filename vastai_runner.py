@@ -435,10 +435,10 @@ def rent_gpu(offer_id, startup_script):
             "https://raw.githubusercontent.com/"
             "galhosostore-coder/ComfyUI-VastAI/main/provision.sh"
         )
-        body["env"] = (
-            f"-e PROVISIONING_SCRIPT={provisioning_url}"
-            f" -e GDRIVE_FOLDER_ID={folder_id}"
-        )
+        body["env"] = {
+            "PROVISIONING_SCRIPT": provisioning_url,
+            "GDRIVE_FOLDER_ID": folder_id,
+        }
     
     try:
         resp = requests.put(url, json=body, headers=headers, timeout=30)
