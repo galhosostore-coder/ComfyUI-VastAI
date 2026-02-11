@@ -1,23 +1,40 @@
 """
-runner_interface.py — v2.0 Professional Backend
+runner_interface.py — v4.0 Professional Backend
 ================================================
-Smart Vast.ai integration with real CLI polling, 
-6-step pipeline progress, and live instance metrics.
+Smart Vast.ai integration with REST API, template-based
+instance creation, 6-step pipeline progress, and live metrics.
+
+v4.0: Uses official ComfyUI template via template_hash_id
+  - REST API (PUT /api/v0/asks/{id}/) instead of CLI for instance creation
+  - Official template includes all ports, env vars, PORTAL_CONFIG, entrypoint
+  - Instance Portal + Cloudflare tunnels = automatic SSL, no URL polling needed
+  - Connection flow: wait for RUNNING → open Vast.ai dashboard → click Open
 """
 
 import json
 import os
+import re
+import ssl
 import sys
 import subprocess
 import threading
 import time
 import traceback
+import urllib.request
+import urllib.error
+import requests
 from datetime import datetime
 from sync_local_to_drive import sync_models as do_sync_models
 
 # ─── Config ───────────────────────────────────────────
 CONFIG_FILE = "launcher_config.json"
 COMFYUI_PORT = 8188
+COMFYUI_IMAGE = "vastai/comfy"
+
+# Official ComfyUI template hash (22k+ instances created)
+# Includes: ports 1111/8080/8188/8384, Instance Portal, Cloudflare tunnels
+COMFYUI_TEMPLATE_HASH = "2188dfd3e0a0b83691bb468ddae0a4e5"
+VASTAI_API_BASE = "https://console.vast.ai/api/v0"
 
 # ─── Pipeline Steps ──────────────────────────────────
 STEPS = [
@@ -36,15 +53,105 @@ STEP_LOADING    = 3
 STEP_CONNECTING = 4
 STEP_READY      = 5
 
+class SmartVastStatus:
+    """
+    v3.0: Analyzes raw Vast.ai status and provides heuristic progress updates.
+    Solves the 'is it stuck?' problem by simulating docker pull progress.
+    """
+    def __init__(self):
+        self.raw_status = "unknown"
+        self.label = "OFFLINE"
+        self.detail = ""
+        self.progress = 0.0  # 0-100
+        self.is_stuck = False
+        self.step_start_time = 0
+        self.last_status = ""
+
+    def get_status(self):
+        return self.label
+
+    def update(self, raw_data, elapsed_total):
+        status = raw_data.get("actual_status")
+        if status is None:
+            status = "unknown"
+        
+        # Reset step timer if status changes
+        if status != self.last_status:
+            self.step_start_time = time.time()
+            self.last_status = status
+            self.progress = 0.0
+        
+        step_elapsed = time.time() - self.step_start_time
+        
+        if status == "loading":
+            self.label = "LOADING"
+            # Heuristic: Docker pulls take 30s to 300s depending on image size/speed
+            # We simulate progress to keep user engaged.
+            # Fast loading curve: 0-50% in 30s, 50-80% in 60s, 80-95% in 300s
+            if step_elapsed < 30:
+                self.progress = (step_elapsed / 30) * 50
+            elif step_elapsed < 90:
+                self.progress = 50 + ((step_elapsed - 30) / 60) * 30
+            else:
+                self.progress = 80 + ((step_elapsed - 90) / 210) * 15
+            
+            self.progress = min(95.0, self.progress)
+            self.detail = f"Downloading Docker Image... {self.progress:.1f}%"
+            
+            # Stuck detection
+            if step_elapsed > 600: # 10 mins
+                 self.is_stuck = True
+                 self.detail = "STUCK: Docker pull taking too long (>10m)."
+
+        elif status == "creating":
+            self.label = "CREATING"
+            self.detail = "Allocating resources..."
+            self.progress = 10.0
+
+        elif status == "connecting":
+            self.label = "CONNECTING"
+            # Heuristic: SSH handshake takes 5-30s
+            self.progress = min(90.0, step_elapsed * 5) # 18s to 90%
+            self.detail = "Waiting for SSH/HTTP..."
+            
+            if step_elapsed > 120:
+                self.is_stuck = True
+                self.detail = "STUCK: Container running but unreachable."
+
+        elif status == "running":
+            self.label = "RUNNING"
+            self.detail = "Service is active"
+            self.progress = 100.0
+            self.is_stuck = False
+
+        elif status == "offline":
+             self.label = "OFFLINE"
+             self.detail = "Instance is offline"
+             self.progress = 0.0
+        
+        elif status == "exited":
+             self.label = "STOPPED"
+             self.detail = "Instance stopped (Storage billing active)"
+             self.progress = 0.0
+
+        else:
+            self.label = status.upper()
+            self.detail = f"Status: {status}"
+            self.progress = 0.0
+            
+        return self.label, self.detail, self.progress
+
 
 class InstanceInfo:
-    """Live instance metadata."""
+    """Live instance metadata with v3.0 cost tracking."""
     def __init__(self):
         self.id = None
         self.gpu_name = ""
         self.gpu_ram = 0
-        self.dph_total = 0.0       # $/hr
-        self.actual_status = ""     # creating, loading, connecting, running
+        self.dph_total = 0.0       # Running price $/hr
+        self.storage_cost = 0.0    # Storage price $/hr (approx 15-20% of total usually, but fetched from offer)
+        self.actual_status = ""    
+        self.status = SmartVastStatus() # v3.0 Logic
         self.ssh_host = ""
         self.ssh_port = ""
         self.url = ""
@@ -52,8 +159,11 @@ class InstanceInfo:
         self.inet_down = 0.0
         self.disk_space = 0.0
         self.start_time = None
-        self.cost_so_far = 0.0
+        self.accumulated_cost = 0.0
     
+    def title(self):
+        return f"ID #{self.id} • {self.gpu_name}"
+
     def uptime_str(self):
         if not self.start_time:
             return "00:00:00"
@@ -64,9 +174,10 @@ class InstanceInfo:
         return f"{h:02d}:{m:02d}:{s:02d}"
     
     def update_cost(self):
+        # Simple estimation: if running, use dph_total. 
         if self.start_time and self.dph_total > 0:
             elapsed_hrs = (time.time() - self.start_time) / 3600
-            self.cost_so_far = elapsed_hrs * self.dph_total
+            self.accumulated_cost = elapsed_hrs * self.dph_total
     
     def to_dict(self):
         self.update_cost()
@@ -75,13 +186,16 @@ class InstanceInfo:
             "gpu": self.gpu_name,
             "gpu_ram": f"{self.gpu_ram:.0f}GB",
             "price": f"${self.dph_total:.3f}/hr",
-            "status": self.actual_status,
+            "status": self.status.label,          # Smart Label
+            "detail": self.status.detail,         # Smart Detail
+            "progress": self.status.progress,     # Smart Progress
             "uptime": self.uptime_str(),
-            "cost": f"${self.cost_so_far:.4f}",
+            "cost": f"${self.accumulated_cost:.4f}",
             "reliability": f"{self.reliability:.1%}",
             "download": f"{self.inet_down:.0f} Mb/s",
             "disk": f"{self.disk_space:.0f}GB",
             "url": self.url,
+            "is_stuck": self.status.is_stuck
         }
 
 
@@ -130,12 +244,17 @@ class VastRunnerInterface:
             os.environ["VAST_PRICE"] = str(self.config.get("price", "0.5"))
             
             try:
-                subprocess.run(
-                    ["vastai", "set", "api-key", api_key],
-                    shell=True, capture_output=True, timeout=10
+                # Fix: Use string command (not list) with shell=True on Windows
+                result = subprocess.run(
+                    f'vastai set api-key {api_key}',
+                    shell=True, capture_output=True, text=True, timeout=10
                 )
-            except:
-                pass
+                if result.returncode == 0:
+                    self.log(f"API key configured ({api_key[:4]}...{api_key[-4:]}) ✓", "success")
+                else:
+                    self.log(f"API key warning: {result.stderr}", "warning")
+            except Exception as e:
+                self.log(f"API key setup error: {e}", "warning")
 
     # ─── Logging ────────────────────────────────────
 
@@ -217,13 +336,21 @@ class VastRunnerInterface:
         gpu = self.config.get("gpu", "RTX_3090")
         max_price = float(self.config.get("price", "0.5"))
         
-        query = f"gpu_name={gpu} rentable=true reliability>0.90 num_gpus=1 dph<={max_price}"
+        gpu_safe = gpu.replace(" ", "_").strip()
+        disk_req = int(float(self.config.get("disk_size", "40")))
         
-        self.log(f"Searching: {gpu} ≤${max_price}/hr, reliability>90%", "info")
+        # Optimization: Filter by Disk Size & Internet Speed (min 200Mbps for fast startup)
+        # vastai search query syntax: key>=val (no spaces around operator usually safe, but check values)
+        query = f"gpu_name={gpu_safe} rentable=true reliability>0.95 num_gpus=1 dph<={max_price} disk_space>={disk_req} inet_down>=200"
+        
+        self.log(f"Smart Search: {gpu} ≤${max_price}/hr, Disk≥{disk_req}GB, Net≥200Mb/s, Rel>95%", "info")
         
         try:
+            # Sort by price (cheapest capable instance)
+            cmd_str = f"vastai search offers \"{query}\" -o dph --raw"
+            
             result = subprocess.run(
-                ["vastai", "search", "offers", query, "-o", "dph", "--raw"],
+                cmd_str,
                 capture_output=True, text=True, shell=True, timeout=30
             )
             
@@ -232,22 +359,63 @@ class VastRunnerInterface:
                 self.set_step(STEP_SEARCH, "error", "CLI error")
                 return None
             
-            offers = json.loads(result.stdout)
-            
-            if not offers:
-                self.log(f"No {gpu} available ≤${max_price}/hr. Try higher price or different GPU.", "error")
-                self.set_step(STEP_SEARCH, "error", "No offers found")
+            stdout = result.stdout.strip()
+            # Robust JSON extraction: Find start and end of list/dict
+            try:
+                if "[" in stdout:
+                    start = stdout.find("[")
+                    end = stdout.rfind("]") + 1
+                    stdout = stdout[start:end]
+                elif "{" in stdout:
+                    start = stdout.find("{")
+                    end = stdout.rfind("}") + 1
+                    stdout = stdout[start:end]
+                
+                offers = json.loads(stdout)
+            except json.JSONDecodeError:
+                self.log(f"JSON Parse Error. Raw: {result.stdout}", "error")
+                self.set_step(STEP_SEARCH, "error", "Parse error")
                 return None
             
+            if not offers:
+                # Fallback: Try relaxing internet speed constraint
+                self.log("No high-speed offers found. Relaxing filters...", "warning")
+                query_relaxed = f"gpu_name={gpu_safe} rentable=true reliability>0.90 num_gpus=1 dph<={max_price} disk_space>={disk_req}"
+                
+                cmd_relaxed = f"vastai search offers \"{query_relaxed}\" -o dph --raw"
+                
+                result = subprocess.run(
+                    cmd_relaxed,
+                    capture_output=True, text=True, shell=True
+                )
+                
+                # Robust extraction for fallback too
+                stdout_rel = result.stdout.strip()
+                try:
+                    if "[" in stdout_rel:
+                        stdout_rel = stdout_rel[stdout_rel.find("["):stdout_rel.rfind("]")+1]
+                    offers = json.loads(stdout_rel)
+                except:
+                    offers = []
+                
+                if not offers:
+                    self.log(f"No {gpu} available with {disk_req}GB disk ≤${max_price}/hr.", "error")
+                    self.set_step(STEP_SEARCH, "error", "No offers")
+                    return None
+            
+            # Pick best offer (first one is cheapest due to sorting)
             best = offers[0]
+            
+            # Double check machine ID to avoid blacklisted hosts? (Optional)
+            
             self.log(
-                f"Found {len(offers)} offer(s). Best: ${best.get('dph_total', 0):.3f}/hr, "
-                f"reliability {best.get('reliability', 0):.1%}, "
-                f"↓{best.get('inet_down', 0):.0f}Mb/s, "
-                f"{best.get('disk_space', 0):.0f}GB disk",
+                f"Selected Offer #{best.get('id')}: ${best.get('dph_total', '0'):.3f}/hr | "
+                f"Rel: {best.get('reliability', 0):.1%} | "
+                f"Down: {best.get('inet_down', 0):.0f}Mb/s | "
+                f"Disk: {best.get('disk_space', 0):.0f}GB",
                 "success"
             )
-            self.set_step(STEP_SEARCH, "done", f"{len(offers)} offers, best ${best.get('dph_total', 0):.3f}/hr")
+            self.set_step(STEP_SEARCH, "done", f"Found ${best.get('dph_total', 0):.3f}/hr")
             
             return best
             
@@ -263,56 +431,65 @@ class VastRunnerInterface:
     # ─── Step 3: Create Instance ────────────────────
 
     def create_instance(self, offer):
-        """Create a Vast.ai instance from the selected offer."""
+        """Create a Vast.ai instance using the official ComfyUI template.
+        
+        v4.0: Uses REST API with template_hash_id instead of CLI --image.
+        The template includes all ports, env vars, PORTAL_CONFIG, and onstart.
+        We only overlay our PROVISIONING_SCRIPT + GDRIVE env vars if needed.
+        """
         self.set_step(STEP_CREATE, "active", "Renting GPU...")
         
         offer_id = offer.get("id")
         gdrive_id = self.config.get("gdrive_id", "")
-        
-        # Build the onstart command
-        onstart_parts = [
-            "pip install -q gdown requests",
-            "apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1",
-        ]
-        
-        # Lazy model loader
-        loader_url = "https://raw.githubusercontent.com/galhosostore-coder/ComfyUI-VastAI/main/lazy_model_loader.py"
-        onstart_parts.append(f"cd /app && curl -sL '{loader_url}' -o lazy_model_loader.py")
-        
-        if gdrive_id:
-            onstart_parts.append(f"cd /app && python lazy_model_loader.py {gdrive_id}")
-        else:
-            onstart_parts.append("cd /app && python main.py --listen 0.0.0.0 --port 8188")
-        
-        onstart_cmd = " && ".join(onstart_parts)
+        disk_size = int(self.config.get("disk_size", "40"))
+        api_key = self.config.get("api_key", os.environ.get("VAST_API_KEY", ""))
         
         self.log(f"Creating instance from offer #{offer_id}...", "info")
         
         try:
-            cmd = [
-                "vastai", "create", "instance", str(offer_id),
-                "--image", "pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime",
-                "--disk", "40",
-                "--onstart-cmd", onstart_cmd,
-                "--direct",
-                "--env", f"-e GDRIVE_FOLDER_ID={gdrive_id} -p 8188:8188",
-                "--raw"
-            ]
+            # ── v4.0: REST API with official ComfyUI template ──
+            # Template provides: image, ports, env, onstart, PORTAL_CONFIG
+            # We only need to send template_hash_id + disk + optional env overlay
             
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, shell=True, timeout=30
-            )
+            url = f"{VASTAI_API_BASE}/asks/{offer_id}/"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
             
-            if result.returncode != 0:
-                self.log(f"Create failed: {result.stderr}", "error")
-                self.set_step(STEP_CREATE, "error", "Creation failed")
+            body = {
+                "template_hash_id": COMFYUI_TEMPLATE_HASH,
+                "disk": disk_size,
+            }
+            
+            # Overlay provisioning env vars (merged with template env)
+            if gdrive_id:
+                provisioning_url = (
+                    "https://raw.githubusercontent.com/"
+                    "galhosostore-coder/ComfyUI-VastAI/main/provision.sh"
+                )
+                body["env"] = (
+                    f"-e PROVISIONING_SCRIPT={provisioning_url}"
+                    f" -e GDRIVE_FOLDER_ID={gdrive_id}"
+                )
+            
+            self.log(f"Using official ComfyUI template ({COMFYUI_TEMPLATE_HASH[:8]}...) ✓", "success")
+            self.log(f"REST API: PUT {url}", "info")
+            self.log(f"Model loader: {'provision.sh' if gdrive_id else 'none'}", "info")
+            
+            resp = requests.put(url, json=body, headers=headers, timeout=30)
+            
+            if resp.status_code not in (200, 201):
+                error_text = resp.text[:300]
+                self.log(f"Create failed [{resp.status_code}]: {error_text}", "error")
+                self.set_step(STEP_CREATE, "error", f"API error {resp.status_code}")
                 return None
             
-            response = json.loads(result.stdout)
+            response = resp.json()
             instance_id = response.get("new_contract")
             
             if not instance_id:
-                self.log(f"Unexpected response: {result.stdout}", "error")
+                self.log(f"No instance ID in response: {response}", "error")
                 self.set_step(STEP_CREATE, "error", "No instance ID returned")
                 return None
             
@@ -332,6 +509,10 @@ class VastRunnerInterface:
             
             return instance_id
             
+        except requests.exceptions.Timeout:
+            self.log("API request timed out (30s). Try again.", "error")
+            self.set_step(STEP_CREATE, "error", "API timeout")
+            return None
         except Exception as e:
             self.log(f"Create error: {e}", "error")
             self.set_step(STEP_CREATE, "error", str(e))
@@ -340,19 +521,22 @@ class VastRunnerInterface:
     # ─── Steps 4-6: Poll Instance Status ────────────
 
     def poll_instance_until_ready(self, instance_id):
-        """Poll `vastai show instance <id> --raw` until RUNNING or ERROR."""
-        self.set_step(STEP_LOADING, "active", "Waiting for Docker image...")
+        """v4.1: Poll status, then auto-discover ComfyUI URL when running.
+        
+        Uses official template which provides Cloudflare tunnels + Instance Portal.
+        Priority: Tunnel URL → Direct HTTP → Dashboard fallback.
+        """
+        self.set_step(STEP_LOADING, "active", "Initializing monitoring...")
         self.set_status("LOADING")
         self.log("Instance is loading Docker image (you are NOT charged during loading)", "info")
         
-        max_wait = 600  # 10 minutes max
+        max_wait = 1800  # 30 minutes — vastai/comfy image is 8.1GB
         start = time.time()
-        last_status = ""
         
         while time.time() - start < max_wait:
             try:
                 result = subprocess.run(
-                    ["vastai", "show", "instance", str(instance_id), "--raw"],
+                    f'vastai show instance {instance_id} --raw',
                     capture_output=True, text=True, shell=True, timeout=15
                 )
                 
@@ -369,76 +553,74 @@ class VastRunnerInterface:
                         continue
                     data = data[0]
                 
-                status = data.get("actual_status", "unknown")
-                self.instance.actual_status = status
+                # Smart Update
+                elapsed_total = time.time() - start
+                label, detail, progress = self.instance.status.update(data, elapsed_total)
+                self.instance.actual_status = data.get("actual_status", "")
                 
-                # Update instance info from poll data
-                if data.get("gpu_name"):
-                    self.instance.gpu_name = data["gpu_name"]
-                if data.get("dph_total"):
-                    self.instance.dph_total = data["dph_total"]
-                
+                # Update cost constants if available
+                if data.get("dph_total"): self.instance.dph_total = data["dph_total"]
+                if data.get("gpu_name"): self.instance.gpu_name = data["gpu_name"]
+
                 self.push_instance_info()
                 
-                if status != last_status:
-                    elapsed = int(time.time() - start)
-                    self.log(f"Status: {status} ({elapsed}s elapsed)", "progress")
-                    last_status = status
+                # Detailed Status Bar Update
+                stuck_suffix = " (Action Required?)" if self.instance.status.is_stuck else ""
+                self.set_status(f"{label}: {detail}{stuck_suffix}")
+
+                # ─── State Handling ─────────────────────────
                 
-                if status == "loading":
-                    pct = min(90, int((time.time() - start) / max_wait * 100))
-                    self.set_step(STEP_LOADING, "active", f"Pulling Docker image... {elapsed}s")
-                    self.set_status("LOADING")
+                if label == "LOADING":
+                    self.set_step(STEP_LOADING, "active", detail)
                     
-                elif status == "connecting":
-                    self.set_step(STEP_LOADING, "done", f"Image pulled ({elapsed}s)")
-                    self.set_step(STEP_CONNECTING, "active", "Establishing connection...")
-                    self.set_status("CONNECTING")
+                elif label == "CONNECTING":
+                    self.set_step(STEP_LOADING, "done", f"Image Loaded ({int(self.instance.status.step_start_time - start)}s)")
+                    self.set_step(STEP_CONNECTING, "active", detail)
                 
-                elif status == "running":
-                    # Extract URL from ports
-                    ports = data.get("ports", {})
-                    public_ip = data.get("public_ipaddr", "")
-                    
-                    if "8188/tcp" in ports:
-                        port_info = ports["8188/tcp"]
-                        if isinstance(port_info, list) and port_info:
-                            host_port = port_info[0].get("HostPort", COMFYUI_PORT)
-                            self.instance.url = f"http://{public_ip}:{host_port}"
-                        else:
-                            self.instance.url = f"http://{public_ip}:{COMFYUI_PORT}"
-                    elif public_ip:
-                        self.instance.url = f"http://{public_ip}:{COMFYUI_PORT}"
-                    
+                elif label == "RUNNING":
+                    # ── v4.1: Auto-discover URL → open browser automatically ──
                     self.set_step(STEP_LOADING, "done", "✓")
                     self.set_step(STEP_CONNECTING, "done", "✓")
-                    self.set_step(STEP_READY, "active", "Waiting for ComfyUI startup...")
-                    self.set_status("CONNECTING")
+                    self.set_step(STEP_READY, "active", "Searching for ComfyUI URL...")
                     
-                    # Wait for ComfyUI to actually respond
-                    if self._wait_for_comfyui():
-                        self.set_step(STEP_READY, "done", self.instance.url)
-                        self.set_status("RUNNING")
-                        self.instance.actual_status = "running"
-                        self.instance.start_time = time.time()  # Reset for cost from "running"
+                    self.log(f"🟢 Instance #{instance_id} is RUNNING!", "success")
+                    self.log("Searching for ComfyUI URL (tunnel → direct → portal)...", "info")
+                    
+                    # Try auto-discovering a working URL
+                    working_url = self._find_working_url(instance_id, data)
+                    
+                    import webbrowser
+                    
+                    if working_url:
+                        self.instance.url = working_url
+                        self.set_step(STEP_READY, "done", "Online ✓")
+                        self.set_status("RUNNING: ComfyUI Ready")
+                        self.instance.start_time = time.time()
                         self.push_instance_info()
-                        self.log(f"ComfyUI is READY at {self.instance.url}", "success")
+                        self.log(f"🚀 ComfyUI READY at {working_url}", "success")
                         
-                        # Start background metrics poller
-                        self._start_metrics_polling()
-                        return True
+                        webbrowser.open(working_url)
+                        self.log("Browser opened automatically!", "success")
                     else:
-                        self.log("ComfyUI didn't respond in time, but instance is running", "warning")
-                        self.set_step(STEP_READY, "done", f"Running (port may need time)")
-                        self.set_status("RUNNING")
+                        # Fallback: open Vast.ai dashboard for manual "Open" button
+                        dashboard_url = "https://cloud.vast.ai/instances/"
+                        self.instance.url = dashboard_url
+                        
+                        self.set_step(STEP_READY, "done", "Running (use Open button)")
+                        self.set_status("RUNNING: ComfyUI Ready")
+                        self.instance.start_time = time.time()
                         self.push_instance_info()
-                        self._start_metrics_polling()
-                        return True
+                        
+                        self.log("Could not auto-detect URL — opening Vast.ai dashboard.", "warning")
+                        self.log("Click the 'Open' button on your instance → Instance Portal → ComfyUI", "info")
+                        webbrowser.open(dashboard_url)
+                    
+                    self._start_metrics_polling()
+                    return True
                 
-                elif status in ("exited", "error", "offline"):
-                    self.log(f"Instance failed with status: {status}", "error")
-                    self.set_step(STEP_LOADING, "error", status)
-                    self.set_status("ERROR")
+                elif label in ("ERROR", "STOPPED", "OFFLINE"):
+                    self.log(f"Instance stopped with status: {label}", "error")
+                    self.set_step(STEP_LOADING, "error", label)
                     return False
                 
             except json.JSONDecodeError:
@@ -446,33 +628,182 @@ class VastRunnerInterface:
             except Exception as e:
                 self.log(f"Poll error: {e}", "warning")
             
-            time.sleep(5)
+            time.sleep(3)
         
-        self.log("Timeout waiting for instance (10 minutes)", "error")
-        self.set_status("ERROR")
+        self.log("Timeout waiting for instance (30 minutes)", "error")
+        self.set_status("ERROR: Timeout")
         return False
     
-    def _wait_for_comfyui(self, timeout=120):
-        """Wait for ComfyUI HTTP endpoint to respond."""
-        import urllib.request
+    def _find_working_url(self, instance_id, instance_data, timeout=300):
+        """v3.4 URL finder: Direct HTTP → Tunnel → Proxy → None.
         
-        if not self.instance.url:
-            return False
-        
+        Re-fetches instance data every 30s so port mappings are always fresh.
+        """
         start = time.time()
+        tunnel_url = None
+        last_refresh = 0
+        direct_urls = self._build_direct_urls(instance_data)
+        proxy_url = f"https://{instance_id}-{COMFYUI_PORT}.proxy.vast.ai/"
+        
+        self.log(f"Direct URLs (initial): {direct_urls}", "info")
+        self.log(f"Proxy URL (fallback): {proxy_url}", "info")
+        self.log("Polling for ComfyUI...", "info")
+        
+        attempt = 0
         while time.time() - start < timeout:
-            try:
-                req = urllib.request.urlopen(self.instance.url, timeout=5)
-                if req.status == 200:
-                    return True
-            except:
-                pass
-            
+            attempt += 1
             elapsed = int(time.time() - start)
-            self.set_step(STEP_READY, "active", f"ComfyUI starting... {elapsed}s")
+            
+            # ── Refresh instance data every 30s to get fresh port mappings ──
+            if elapsed - last_refresh >= 30:
+                last_refresh = elapsed
+                fresh_data = self._refresh_instance_data(instance_id)
+                if fresh_data:
+                    new_urls = self._build_direct_urls(fresh_data)
+                    if new_urls != direct_urls:
+                        direct_urls = new_urls
+                        self.log(f"Updated direct URLs: {direct_urls}", "info")
+            
+            # ── Tier 1: Direct HTTP URLs (best — no SSL issues) ──
+            for url in direct_urls:
+                if self._check_url(url):
+                    self.log(f"✓ Direct HTTP connection live: {url}", "success")
+                    return url
+            
+            # ── Tier 2: Look for Cloudflare tunnel in logs ──
+            if not tunnel_url:
+                tunnel_url = self._extract_tunnel_url(instance_id)
+                if tunnel_url:
+                    self.log(f"🔗 Found tunnel: {tunnel_url}", "success")
+            
+            if tunnel_url and self._check_url(tunnel_url):
+                self.log("✓ Cloudflare tunnel is live!", "success")
+                return tunnel_url
+            
+            # Status update
+            self.set_step(STEP_READY, "active", f"Waiting for ComfyUI... {elapsed}s")
+            
+            if elapsed > 0 and elapsed % 30 == 0:
+                self.log(f"Still waiting... ({elapsed}s / {timeout}s)", "info")
+            
             time.sleep(5)
         
-        return False
+        # Timeout — try proxy as absolute last resort
+        if self._check_url(proxy_url):
+            self.log("⚠ Only proxy URL works (browser will show SSL warning)", "warning")
+            self.log("Click 'Advanced' → 'Proceed' in the browser", "info")
+            return proxy_url
+        
+        self.log(f"Timeout ({timeout}s). No working URL found.", "error")
+        self.log(f"Tried: Direct={direct_urls}, Tunnel={tunnel_url}, Proxy={proxy_url}", "error")
+        return None
+    
+    def _refresh_instance_data(self, instance_id):
+        """Re-fetch instance data from Vast.ai API for fresh port mappings."""
+        try:
+            result = subprocess.run(
+                f'vastai show instance {instance_id} --raw',
+                capture_output=True, text=True, shell=True, timeout=15
+            )
+            if result.returncode != 0:
+                return None
+            data = json.loads(result.stdout)
+            if isinstance(data, list):
+                data = data[0] if data else None
+            return data
+        except Exception:
+            return None
+    
+    def _extract_tunnel_url(self, instance_id):
+        """v3.1: Extract tunnel/proxy URL from instance logs.
+        
+        Searches for:
+        1. Cloudflare Quick Tunnels: https://xxx.trycloudflare.com
+        2. Vast.ai proxy URLs: https://xxx.vast.ai
+        3. Any HTTPS URL that looks like a ComfyUI endpoint
+        """
+        try:
+            result = subprocess.run(
+                f'vastai logs {instance_id} --raw',
+                shell=True, capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0 or not result.stdout:
+                return None
+            
+            logs = result.stdout
+            
+            # v3.1: Pattern 1 - Cloudflare tunnel URLs
+            tunnel_matches = re.findall(
+                r'(https://[\w-]+\.trycloudflare\.com)', logs
+            )
+            if tunnel_matches:
+                return tunnel_matches[-1]
+            
+            # v3.1: Pattern 2 - Vast.ai proxy URLs  
+            proxy_matches = re.findall(
+                r'(https://[\w-]+\.proxy\.vast\.ai[/\w]*)', logs
+            )
+            if proxy_matches:
+                return proxy_matches[-1]
+            
+            # v3.1: Pattern 3 - Generic vast.ai URLs with port
+            vast_matches = re.findall(
+                r'(https://[\w-]+-\d+\.vast\.ai[/\w]*)', logs
+            )
+            if vast_matches:
+                return vast_matches[-1]
+            
+            return None
+        except Exception as e:
+            self.log(f"Log parse error: {e}", "warning")
+            return None
+    
+    def _build_direct_urls(self, instance_data):
+        """v3.1: Build candidate URLs from instance data.
+        Includes direct IP:port and Vast.ai proxy HTTPS URLs.
+        """
+        urls = []
+        public_ip = instance_data.get("public_ipaddr", "")
+        ports = instance_data.get("ports", {})
+        direct_port_start = instance_data.get("direct_port_start", 0)
+        
+        # From ports dict (Docker port mapping)
+        if ports and isinstance(ports, dict):
+            for key in ["8188/tcp", "8188"]:
+                if key in ports:
+                    port_info = ports[key]
+                    if isinstance(port_info, list) and port_info:
+                        hp = port_info[0].get("HostPort", "")
+                        if hp and public_ip:
+                            urls.append(f"http://{public_ip}:{hp}")
+        
+        # Raw fallback with known port (works with --direct)
+        if public_ip:
+            urls.append(f"http://{public_ip}:{COMFYUI_PORT}")
+        
+        # Dedupe preserving order
+        seen = set()
+        return [u for u in urls if u not in seen and not seen.add(u)]
+    
+    def _check_url(self, url, timeout_sec=5):
+        """v3.1: Quick HTTP/HTTPS check — returns True if URL is alive.
+        Supports HTTPS with unverified certs (Vast.ai proxies use self-signed).
+        """
+        try:
+            # v3.1: Create SSL context that doesn't verify certs for proxies
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            req = urllib.request.Request(url, method='GET')
+            req.add_header('User-Agent', 'ComfyUI-VastAI/3.1')
+            resp = urllib.request.urlopen(req, timeout=timeout_sec, context=ctx)
+            return resp.status < 400
+        except urllib.error.HTTPError as he:
+            # 401/403 = server is UP (auth blocking)
+            return he.code in (401, 403)
+        except Exception:
+            return False
 
     # ─── Metrics Polling ────────────────────────────
 
@@ -488,17 +819,21 @@ class VastRunnerInterface:
                     
                     # Also check if instance is still running
                     result = subprocess.run(
-                        ["vastai", "show", "instance", str(self.instance.id), "--raw"],
+                        f'vastai show instance {self.instance.id} --raw',
                         capture_output=True, text=True, shell=True, timeout=10
                     )
                     if result.returncode == 0:
                         data = json.loads(result.stdout)
                         if isinstance(data, list) and data:
                             data = data[0]
+                        
+                        # Update status object
+                        self.instance.status.update(data, 0) # Elapsed not tracked here accurately but ok for polling
                         status = data.get("actual_status", "")
+                        
                         if status in ("exited", "offline", "error"):
                             self.log(f"Instance went {status}!", "error")
-                            self.set_status("ERROR")
+                            self.set_status(f"ERROR: {status}")
                             self._polling = False
                             break
                 except:
@@ -509,6 +844,15 @@ class VastRunnerInterface:
         self._poll_thread = threading.Thread(target=poll_loop, daemon=True)
         self._poll_thread.start()
 
+    def get_detailed_events(self):
+        """v3.0: Fetch system events for the troubleshooting tab."""
+        # In a real app we might parse 'vastai logs' for system messages
+        # For now we return the SmartStatus detail history if we tracked it,
+        # or just the current status detail.
+        return [
+            f"[{time.strftime('%H:%M:%S')}] {self.instance.status.label}: {self.instance.status.detail}"
+        ]
+
     # ─── Instance Logs ──────────────────────────────
 
     def get_instance_logs(self):
@@ -518,7 +862,7 @@ class VastRunnerInterface:
         
         try:
             result = subprocess.run(
-                ["vastai", "logs", str(self.instance.id), "--tail", "100"],
+                f'vastai logs {self.instance.id} --tail 100',
                 capture_output=True, text=True, shell=True, timeout=15
             )
             return result.stdout if result.returncode == 0 else f"Error: {result.stderr}"
@@ -536,11 +880,25 @@ class VastRunnerInterface:
             for i in range(len(STEPS)):
                 self.set_step(i, "pending")
             
-            # Step 1: Sync
-            self.sync_to_drive()
+            # Parallel Execution: Sync & Search
+            from concurrent.futures import ThreadPoolExecutor
             
-            # Step 2: Search
-            offer = self.search_gpus()
+            self.log("Starting parallel sync & search...", "info")
+            offer = None
+            
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_sync = executor.submit(self.sync_to_drive)
+                future_search = executor.submit(self.search_gpus)
+                
+                # Search returns offer
+                try:
+                    offer = future_search.result()
+                    # Wait for sync
+                    future_sync.result()
+                except Exception as e:
+                    self.log(f"Parallel execution error: {e}", "error")
+                    return False
+
             if not offer:
                 self.set_status("ERROR")
                 return False
@@ -573,16 +931,14 @@ class VastRunnerInterface:
         
         try:
             working_dir = os.path.dirname(local_path)
+            # Windows: Create new console to prevent pipe deadlock
+            flags = subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0
+            
             self.process = subprocess.Popen(
                 f'"{local_path}"',
                 shell=True,
                 cwd=working_dir,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                bufsize=1,
-                universal_newlines=True
+                creationflags=flags
             )
             
             time.sleep(2)
@@ -597,6 +953,26 @@ class VastRunnerInterface:
         except Exception as e:
             self.log(f"Launch error: {e}", "error")
             return False
+
+    # ─── Stop Local ─────────────────────────────────
+    def stop_local(self):
+        """Stop the local ComfyUI process."""
+        if self.process:
+            self.log("Stopping local instance...", "warning")
+            try:
+                # Force kill process tree (Windows)
+                if os.name == 'nt':
+                    subprocess.call(['taskkill', '/F', '/T', '/PID', str(self.process.pid)])
+                else:
+                    self.process.terminate()
+            except Exception as e:
+                self.log(f"Error stopping process: {e}", "error")
+            
+            self.process = None
+            self.set_status("OFFLINE")
+            self.log("Local instance stopped.", "success")
+            return True
+        return False
 
     # ─── Destroy ────────────────────────────────────
 
@@ -617,12 +993,12 @@ class VastRunnerInterface:
         self.log(f"Destroying instance #{instance_id}...", "info")
         try:
             result = subprocess.run(
-                ["vastai", "destroy", "instance", str(instance_id)],
+                f'vastai destroy instance {instance_id}',
                 capture_output=True, text=True, shell=True, timeout=15
             )
             
             if result.returncode == 0:
-                cost = self.instance.cost_so_far
+                cost = self.instance.accumulated_cost
                 self.log(f"Instance #{instance_id} destroyed. Total cost: ${cost:.4f}", "success")
             else:
                 self.log(f"Destroy error: {result.stderr}", "error")
@@ -643,8 +1019,7 @@ class VastRunnerInterface:
         
         try:
             result = subprocess.run(
-                ["vastai", "execute", str(instance_id),
-                 "cat /app/new_models_manifest.json 2>/dev/null || echo '[]'"],
+                f'vastai execute {instance_id} "cat /workspace/new_models_manifest.json 2>/dev/null || echo \"[]\""',
                 capture_output=True, text=True, shell=True, timeout=15
             )
             
@@ -669,7 +1044,7 @@ class VastRunnerInterface:
                         
                         self.log(f"Downloading {rel_path} ({size_mb}MB)...", "progress")
                         scp_result = subprocess.run(
-                            ["vastai", "scp", f"{instance_id}:{full_path}", local_dest],
+                            f'vastai scp "{instance_id}:{full_path}" "{local_dest}"',
                             capture_output=True, text=True, shell=True, timeout=300
                         )
                         

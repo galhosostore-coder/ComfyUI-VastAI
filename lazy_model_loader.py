@@ -21,8 +21,13 @@ import threading
 import subprocess
 from pathlib import Path
 
-# Paths inside the container
-COMFYUI_PATH = "/app"
+try:
+    import requests
+except ImportError:
+    requests = None  # Will be installed by install_gdown/pip
+
+# Paths inside the vastai/comfy container
+COMFYUI_PATH = "/workspace/ComfyUI"
 MODELS_PATH = f"{COMFYUI_PATH}/models"
 
 # Marker for stub files: we use a companion .stub file
@@ -326,7 +331,7 @@ def setup_rclone(folder_id):
     except FileNotFoundError:
         print("[LazyLoader] Installing rclone...")
         try:
-            subprocess.run(["curl", "-sL", "https://rclone.org/install.sh", "|", "bash"], 
+            subprocess.run("curl -sL https://rclone.org/install.sh | bash",
                          shell=True, check=True)
             return True
         except:
@@ -422,9 +427,10 @@ def main():
     
     Usage: python lazy_model_loader.py <gdrive_folder_id>
     """
-    import requests as req
     global requests
-    requests = req
+    if requests is None:
+        import requests as req
+        requests = req
 
     if len(sys.argv) < 2:
         print("[LazyLoader] Usage: python lazy_model_loader.py <gdrive_folder_id>")

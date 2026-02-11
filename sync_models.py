@@ -5,21 +5,34 @@ import json
 import time
 import argparse
 
-# Standard ComfyUI model folder structure
+# Standard ComfyUI model folder structure (matches ai-dock container paths)
 MODEL_MAP = {
     "checkpoints": "models/checkpoints",
-    "loras": "models/loras",
-    "vae": "models/vae",
-    "controlnet": "models/controlnet",
-    "upscale_models": "models/upscale_models",
-    "embeddings": "models/embeddings",
     "clip": "models/clip",
+    "clip_vision": "models/clip_vision",
+    "configs": "models/configs",
+    "controlnet": "models/controlnet",
+    "diffusers": "models/diffusers",
+    "diffusion_models": "models/diffusion_models",
+    "embeddings": "models/embeddings",
+    "gligen": "models/gligen",
+    "hypernetworks": "models/hypernetworks",
+    "latent_upscale_models": "models/latent_upscale_models",
+    "loras": "models/loras",
+    "model_patches": "models/model_patches",
+    "photomaker": "models/photomaker",
+    "style_models": "models/style_models",
+    "text_encoders": "models/text_encoders",
     "unet": "models/unet",
-    "clip_vision": "models/clip_vision"
+    "upscale_models": "models/upscale_models",
+    "vae": "models/vae",
+    "vae_approx": "models/vae_approx",
+    "audio_encoders": "models/audio_encoders",
 }
 
-CACHE_FILE = "/app/.drive_cache.json"
+CACHE_FILE = "/workspace/ComfyUI/.drive_cache.json"
 CACHE_TTL = 3600  # 1 hour
+
 
 def install_gdown():
     try:

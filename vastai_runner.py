@@ -4,13 +4,11 @@ Vast.ai Runner for ComfyUI - Simplified Google Drive Mode
 ==========================================================
 Just drop models in your Google Drive folder. That's it.
 
-Environment Variables (set in Coolify):
-    VAST_API_KEY      - Your Vast.ai API key
-    GDRIVE_FOLDER_ID  - Your Google Drive folder ID
-    VAST_GPU          - GPU to search for (default: RTX_3090)
-    VAST_PRICE        - Max price per hour (default: 0.5)
+v4.0: Uses official ComfyUI template via REST API (template_hash_id)
+      Instance Portal + Cloudflare tunnels for reliable access.
 
 Usage:
+    python vastai_runner.py --launch
     python vastai_runner.py --workflow workflow.json
     python vastai_runner.py --stop
 """
@@ -59,10 +57,14 @@ def get_env(name, default=None, required=False):
         sys.exit(1)
     return value
 
-# ComfyUI paths inside the Vast.ai container
-COMFYUI_IMAGE = "yanwk/comfyui-boot:latest"
-COMFYUI_PATH = "/app"
+# ComfyUI paths inside the Vast.ai container (vastai/comfy)
+COMFYUI_IMAGE = "vastai/comfy"
+COMFYUI_PATH = "/workspace/ComfyUI"
 MODELS_PATH = f"{COMFYUI_PATH}/models"
+
+# Official ComfyUI template hash (22k+ instances created)
+COMFYUI_TEMPLATE_HASH = "2188dfd3e0a0b83691bb468ddae0a4e5"
+VASTAI_API_BASE = "https://console.vast.ai/api/v0"
 
 # Model directories (ComfyUI standard structure)
 MODEL_DIRS = {
@@ -407,19 +409,49 @@ def search_gpu(gpu_name, max_price):
     return best
 
 def rent_gpu(offer_id, startup_script):
-    """Rent the specific GPU offer."""
-    print(f"\n💰 Renting instance {offer_id}...")
+    """Rent the specific GPU offer. v4.0: REST API + official ComfyUI template."""
+    print(f"\n💰 Renting instance {offer_id} with official ComfyUI template...")
     
-    # We use the raw startup script in onstart-cmd
-    cmd = [
-        "vastai", "create", "instance", str(offer_id),
-        "--image", COMFYUI_IMAGE,
-        "--disk", "20",
-        "--onstart-cmd", startup_script,
-        "--raw"
-    ]
+    api_key = os.getenv("VAST_API_KEY", "")
+    if not api_key:
+        print("❌ VAST_API_KEY not set!")
+        return None
     
-    result = run_vastai(cmd)
+    url = f"{VASTAI_API_BASE}/asks/{offer_id}/"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    
+    body = {
+        "template_hash_id": COMFYUI_TEMPLATE_HASH,
+        "disk": 40,
+    }
+    
+    # Overlay provisioning env vars if GDrive is configured
+    folder_id = os.getenv("GDRIVE_FOLDER_ID", "")
+    if folder_id:
+        provisioning_url = (
+            "https://raw.githubusercontent.com/"
+            "galhosostore-coder/ComfyUI-VastAI/main/provision.sh"
+        )
+        body["env"] = (
+            f"-e PROVISIONING_SCRIPT={provisioning_url}"
+            f" -e GDRIVE_FOLDER_ID={folder_id}"
+        )
+    
+    try:
+        resp = requests.put(url, json=body, headers=headers, timeout=30)
+        
+        if resp.status_code not in (200, 201):
+            print(f"❌ API error [{resp.status_code}]: {resp.text[:300]}")
+            return None
+        
+        result = resp.json()
+    except Exception as e:
+        print(f"❌ Request error: {e}")
+        return None
+    
     if not result or 'new_contract' not in result:
         print(f"❌ Failed to rent instance: {result}")
         return None
@@ -466,14 +498,14 @@ def wait_for_ready(instance_id, timeout=600):
     return None
 
 def get_url(instance):
-    """Extract http URL from instance data."""
-    if 'ports' not in instance: return None
+    """Get the Vast.ai dashboard URL for accessing the instance.
     
-    # Vast.ai mapping: 8188/tcp -> [{'HostIp': '...', 'HostPort': '...'}]
-    ports = instance['ports']
-    if '8188/tcp' in ports and ports['8188/tcp']:
-        mapping = ports['8188/tcp'][0]
-        return f"http://{mapping['HostIp']}:{mapping['HostPort']}"
+    v4.0: Instance Portal (via official template) handles all connections
+    with Cloudflare tunnels and valid SSL. No need to construct direct URLs.
+    """
+    instance_id = instance.get('id')
+    if instance_id:
+        return f"https://cloud.vast.ai/instances/"
     return None
 
 def destroy(instance_id):
@@ -560,14 +592,25 @@ def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
         return False
     
     try:
-        # Wait (Increase timeout for potential node installs)
-        # ... (Rest of function remains same)
+        # Wait for ready (returns the instance dict or None)
+        instance = wait_for_ready(instance_id, timeout=600)
+        if not instance:
+            print("❌ Instance failed to start.")
+            destroy(instance_id)
+            return False
         
-        # Extra wait for ComfyUI
+        # Extra wait for ComfyUI to initialize
         print("⏳ ComfyUI initializing...")
         time.sleep(30)
         
         url = get_url(instance)
+        if not url:
+            print("❌ Could not determine ComfyUI URL.")
+            print(f"Try manually: https://console.vast.ai/instances/")
+            if not keep_alive:
+                destroy(instance_id)
+            return False
+        
         print(f"🌐 {url}")
         
         # Queue
@@ -586,7 +629,6 @@ def run_workflow(workflow_path, gpu_name, max_price, keep_alive):
                 print(" ✅")
                 
                 # Download outputs
-                # Save to standard 'output' folder so it persists (if mounted) or is easy to find
                 output_dir = "output"
                 os.makedirs(output_dir, exist_ok=True)
                 outputs = history[prompt_id].get('outputs', {})
